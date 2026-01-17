@@ -1,46 +1,37 @@
 # QWED-MCP
 
 [![PyPI](https://img.shields.io/pypi/v/qwed-mcp?color=blue&label=PyPI)](https://pypi.org/project/qwed-mcp/)
+[![Tests](https://github.com/QWED-AI/qwed-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/QWED-AI/qwed-mcp/actions)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green)](https://modelcontextprotocol.io)
 
-**MCP Server for QWED Verification - Use QWED verification tools in Claude Desktop, VS Code, and any MCP client.**
+**MCP Server for QWED Verification** — Bring deterministic verification to Claude Desktop, VS Code, and any MCP-compatible AI assistant.
+
+> 📚 **Full Documentation:** [docs.qwedai.com/mcp](https://docs.qwedai.com/docs/mcp/overview)
 
 ---
 
-## What is QWED-MCP?
-
-QWED-MCP brings deterministic verification to any MCP-compatible AI assistant. Instead of trusting LLMs to compute correctly, QWED-MCP provides tools that verify outputs using:
-
-- **SymPy** for mathematical verification
-- **Z3 SMT Solver** for logical reasoning
-- **AST Analysis** for code security
-- **Pattern Matching** for SQL injection detection
-
----
-
-## Installation
+## ⚡ Quick Install
 
 ```bash
 pip install qwed-mcp
 ```
 
-Or install from source:
-
-```bash
-git clone https://github.com/QWED-AI/qwed-mcp.git
-cd qwed-mcp
-pip install -e .
-```
-
 ---
 
-## Quick Start
+## 🚀 Setup with Claude Desktop
 
-### Use with Claude Desktop
+### Step 1: Find your config file
 
-Add to your `claude_desktop_config.json`:
+| OS | Path |
+|----|------|
+| **Windows** | `%APPDATA%\Claude\claude_desktop_config.json` |
+| **macOS** | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| **Linux** | `~/.config/Claude/claude_desktop_config.json` |
 
+### Step 2: Add QWED-MCP
+
+**macOS/Linux:**
 ```json
 {
   "mcpServers": {
@@ -51,117 +42,131 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-### Use with VS Code
-
-Install the MCP extension and add to settings:
-
+**Windows (use python -m):**
 ```json
 {
-  "mcp.servers": {
+  "mcpServers": {
     "qwed-verification": {
-      "command": "qwed-mcp"
+      "command": "python",
+      "args": ["-m", "qwed_mcp.server"]
     }
   }
 }
 ```
 
----
+### Step 3: Restart Claude Desktop
 
-## Available Tools
+Quit completely (system tray → Quit) and reopen.
 
-### `verify_math`
+### Step 4: Test it!
 
-Verify mathematical calculations using SymPy.
-
-```
-Input: expression="x^2", claimed_result="2x", operation="derivative"
-Output: ✅ VERIFIED - The derivative of x^2 is indeed 2x
-```
-
-### `verify_logic`
-
-Verify logical arguments using Z3 SMT solver.
-
-```
-Input: premises=["All humans are mortal", "Socrates is human"], conclusion="Socrates is mortal"
-Output: ✅ VERIFIED - The conclusion logically follows from the premises
-```
-
-### `verify_code`
-
-Check code for security vulnerabilities.
-
-```
-Input: code="eval(user_input)", language="python"
-Output: ❌ FAILED - Dangerous function call: eval()
-```
-
-### `verify_sql`
-
-Detect SQL injection and validate queries.
-
-```
-Input: query="SELECT * FROM users WHERE id = '1' OR '1'='1'"
-Output: ❌ FAILED - Potential SQL injection detected
-```
+Ask Claude:
+> "Verify the derivative of x³ equals 3x² using verify_math"
 
 ---
 
-## How It Works
+## 🔧 Available Tools
 
+| Tool | Engine | Use Case |
+|------|--------|----------|
+| `verify_math` | SymPy | Verify calculations, derivatives, integrals |
+| `verify_logic` | Z3 Solver | Prove logical arguments, validate reasoning |
+| `verify_code` | AST Analysis | Detect security vulnerabilities |
+| `verify_sql` | Pattern Matching | SQL injection detection |
+
+---
+
+## 💡 Example Prompts for Claude
+
+### Financial Calculations
 ```
-┌─────────────────────────────────────────┐
-│     Claude Desktop / VS Code            │
-│          (MCP Client)                   │
-└───────────────────┬─────────────────────┘
-                    │ MCP Protocol
-                    ▼
-┌─────────────────────────────────────────┐
-│          QWED-MCP Server                │
-├─────────────────────────────────────────┤
-│  Tools:                                 │
-│  ├─ verify_math()    → SymPy            │
-│  ├─ verify_logic()   → Z3 Solver        │
-│  ├─ verify_code()    → AST Analysis     │
-│  └─ verify_sql()     → Pattern Match    │
-└─────────────────────────────────────────┘
+A bank says: "Invest $10,000 at 7.5% compounded quarterly for 5 years = $14,356.29"
+Use verify_math to check using A = P(1 + r/n)^(nt)
+```
+
+### Loan EMI Verification
+```
+Verify: ₹10,00,000 loan at 9% for 5 years = EMI of ₹20,758
+Use the EMI formula: EMI = P × r × (1+r)^n / ((1+r)^n - 1)
+```
+
+### Logic Verification
+```
+Use verify_logic:
+Premises: "All mammals are warm-blooded", "Dolphins are mammals"
+Conclusion: "Dolphins are warm-blooded"
+```
+
+### Code Security Check
+```
+Use verify_code to check this for security issues:
+
+def run_command(cmd):
+    os.system(cmd)
+    return eval(get_response())
+```
+
+### SQL Injection Detection
+```
+Use verify_sql to check:
+SELECT * FROM accounts WHERE user_id = '1' OR '1'='1'
 ```
 
 ---
 
-## Use Cases
+## 🏗️ How It Works
+
+```
+┌───────────────────────────────────────────┐
+│      Claude Desktop / VS Code             │
+│           (MCP Client)                    │
+└─────────────────┬─────────────────────────┘
+                  │ MCP Protocol (JSON-RPC)
+                  ▼
+┌───────────────────────────────────────────┐
+│           QWED-MCP Server                 │
+├───────────────────────────────────────────┤
+│  verify_math()    → SymPy (symbolic math) │
+│  verify_logic()   → Z3 SMT Solver         │
+│  verify_code()    → Python AST Analysis   │
+│  verify_sql()     → Regex Pattern Match   │
+└───────────────────────────────────────────┘
+```
+
+---
+
+## 🎯 Why QWED-MCP?
 
 | Without QWED-MCP | With QWED-MCP |
 |------------------|---------------|
-| Claude calculates → may hallucinate | Claude calls `verify_math()` → 100% correct |
-| Claude writes SQL → may be insecure | Claude calls `verify_sql()` → injection detected |
-| Claude reasons → may be illogical | Claude calls `verify_logic()` → proven with Z3 |
-| Claude generates code → may be unsafe | Claude calls `verify_code()` → security checked |
+| LLM calculates → 95% correct | `verify_math()` → **100% correct** |
+| LLM writes SQL → might inject | `verify_sql()` → **injection detected** |
+| LLM reasons → might be wrong | `verify_logic()` → **formally proven** |
+| LLM codes → might be unsafe | `verify_code()` → **security checked** |
 
 ---
 
-## Configuration
+## 📁 Examples
 
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `QWED_LOG_LEVEL` | Logging level | `INFO` |
+See the [`examples/`](./examples) folder for:
+- Python client usage
+- Sample verification scripts
+- Integration examples
 
 ---
 
-## Development
+## 🛠️ Development
 
 ```bash
 # Clone
 git clone https://github.com/QWED-AI/qwed-mcp.git
 cd qwed-mcp
 
-# Install dev dependencies
+# Install with dev dependencies
 pip install -e ".[dev]"
 
 # Run tests
-pytest
+pytest tests/ -v
 
 # Format code
 black src/
@@ -169,14 +174,33 @@ black src/
 
 ---
 
-## Links
+## 📖 Documentation
 
-- **Documentation:** [docs.qwedai.com](https://docs.qwedai.com)
-- **QWED Core:** [QWED-AI/qwed-verification](https://github.com/QWED-AI/qwed-verification)
-- **MCP Protocol:** [modelcontextprotocol.io](https://modelcontextprotocol.io)
+| Resource | Link |
+|----------|------|
+| Full Docs | [docs.qwedai.com/mcp](https://docs.qwedai.com/docs/mcp/overview) |
+| Tools Reference | [docs.qwedai.com/mcp/tools](https://docs.qwedai.com/docs/mcp/tools) |
+| Examples | [docs.qwedai.com/mcp/examples](https://docs.qwedai.com/docs/mcp/examples) |
+| Troubleshooting | [docs.qwedai.com/mcp/troubleshooting](https://docs.qwedai.com/docs/mcp/troubleshooting) |
+| MCP Protocol | [modelcontextprotocol.io](https://modelcontextprotocol.io) |
 
 ---
 
-## License
+## 🔗 Related Projects
 
-Apache 2.0 - See [LICENSE](LICENSE)
+- **QWED Core** — [github.com/QWED-AI/qwed-verification](https://github.com/QWED-AI/qwed-verification)
+- **QWED-UCP** — [github.com/QWED-AI/qwed-ucp](https://github.com/QWED-AI/qwed-ucp)
+- **QWED Open Responses** — [github.com/QWED-AI/qwed-open-responses](https://github.com/QWED-AI/qwed-open-responses)
+
+---
+
+## 📄 License
+
+Apache 2.0 — See [LICENSE](LICENSE)
+
+---
+
+<p align="center">
+  <b>Built by <a href="https://qwedai.com">QWED AI</a></b><br>
+  <i>Making AI outputs trustworthy through formal verification</i>
+</p>
