@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qwed-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP Server for QWED Verification - Use QWED verification tools in Claude Desktop, VS Code, and any MCP client"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -27,6 +27,8 @@ dependencies = [
     "sympy>=1.12",
     "z3-solver>=4.12.0",
     "httpx>=0.24.0",
+    "qwed-finance>=1.2.0",
+    "qwed-ucp>=0.2.0",
 ]
 
 [project.optional-dependencies]
