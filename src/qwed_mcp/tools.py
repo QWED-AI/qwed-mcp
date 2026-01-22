@@ -27,6 +27,18 @@ except ImportError:
     commerce_guard = None
     logging.warning("Enterprise Guards (Finance/UCP) not found. Specialized tools will be disabled.")
 
+# Import Legal Guards
+try:
+    from qwed_legal import DeadlineGuard, CitationGuard, LiabilityGuard
+    deadline_guard = DeadlineGuard()
+    citation_guard = CitationGuard()
+    liability_guard = LiabilityGuard()
+except ImportError:
+    deadline_guard = None
+    citation_guard = None
+    liability_guard = None
+    logging.warning("Legal Guards (qwed-legal) not found. Legal verification tools will be disabled.")
+
 logger = logging.getLogger("qwed-mcp.tools")
 
 
@@ -153,6 +165,67 @@ def register_tools(server: Server) -> None:
                     "required": ["cart_json"]
                 }
             ),
+            Tool(
+                name="verify_legal_deadline",
+                description="Verifies deadline calculations in contracts using QWED Legal Guard. "
+                           "Checks business days, leap years, and jurisdiction-specific holidays.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "signing_date": {
+                            "type": "string",
+                            "description": "The date the contract was signed (e.g., '2026-01-15')"
+                        },
+                        "term": {
+                            "type": "string",
+                            "description": "The deadline term (e.g., '30 business days', '2 weeks')"
+                        },
+                        "claimed_deadline": {
+                            "type": "string",
+                            "description": "The deadline claimed by the LLM"
+                        }
+                    },
+                    "required": ["signing_date", "term", "claimed_deadline"]
+                }
+            ),
+            Tool(
+                name="verify_legal_citation",
+                description="Verifies legal citations (case names, reporters) using QWED Legal Guard. "
+                           "Catches hallucinated case citations like in Mata v. Avianca scandal.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "citation": {
+                            "type": "string",
+                            "description": "Full citation (e.g., 'Brown v. Board, 347 U.S. 483 (1954)')"
+                        }
+                    },
+                    "required": ["citation"]
+                }
+            ),
+            Tool(
+                name="verify_legal_liability",
+                description="Verifies liability cap calculations in contracts using QWED Legal Guard. "
+                           "Checks percentage calculations and cap amounts.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "contract_value": {
+                            "type": "number",
+                            "description": "Total contract value"
+                        },
+                        "cap_percentage": {
+                            "type": "number",
+                            "description": "Liability cap percentage (e.g., 200 for 200%)"
+                        },
+                        "claimed_cap": {
+                            "type": "number",
+                            "description": "Cap amount claimed by LLM"
+                        }
+                    },
+                    "required": ["contract_value", "cap_percentage", "claimed_cap"]
+                }
+            ),
         ]
     
     @server.call_tool()
@@ -221,6 +294,67 @@ def register_tools(server: Server) -> None:
                         )]
                 except Exception as e:
                     return [TextContent(type="text", text=f"Error parsing cart: {str(e)}")]
+            
+            # Legal Verification Tools
+            elif name == "verify_legal_deadline":
+                if deadline_guard is None:
+                    return [TextContent(type="text", text="❌ Error: qwed-legal not installed.")]
+                
+                dl_result = deadline_guard.verify(
+                    signing_date=arguments["signing_date"],
+                    term=arguments["term"],
+                    claimed_deadline=arguments["claimed_deadline"]
+                )
+                
+                if dl_result.verified:
+                    return [TextContent(
+                        type="text",
+                        text=f"✅ QWED Legal: Deadline verified. {dl_result.message}"
+                    )]
+                else:
+                    return [TextContent(
+                        type="text",
+                        text=f"🛑 QWED Legal: BLOCKED. {dl_result.message}"
+                    )]
+            
+            elif name == "verify_legal_citation":
+                if citation_guard is None:
+                    return [TextContent(type="text", text="❌ Error: qwed-legal not installed.")]
+                
+                cite_result = citation_guard.verify(arguments["citation"])
+                
+                if cite_result.valid:
+                    return [TextContent(
+                        type="text",
+                        text=f"✅ QWED Legal: Citation format valid. {cite_result.message}"
+                    )]
+                else:
+                    return [TextContent(
+                        type="text",
+                        text=f"🛑 QWED Legal: BLOCKED. {cite_result.message}"
+                    )]
+            
+            elif name == "verify_legal_liability":
+                if liability_guard is None:
+                    return [TextContent(type="text", text="❌ Error: qwed-legal not installed.")]
+                
+                liab_result = liability_guard.verify_cap(
+                    contract_value=arguments["contract_value"],
+                    cap_percentage=arguments["cap_percentage"],
+                    claimed_cap=arguments["claimed_cap"]
+                )
+                
+                if liab_result.verified:
+                    return [TextContent(
+                        type="text",
+                        text=f"✅ QWED Legal: Liability cap verified. {liab_result.message}"
+                    )]
+                else:
+                    return [TextContent(
+                        type="text",
+                        text=f"🛑 QWED Legal: BLOCKED. {liab_result.message}"
+                    )]
+            
             else:
                 return [TextContent(
                     type="text",
