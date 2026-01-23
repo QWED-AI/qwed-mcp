@@ -148,6 +148,121 @@ SELECT * FROM accounts WHERE user_id = '1' OR '1'='1'
 
 ---
 
+## 💡 What QWED-MCP Is (and Isn't)
+
+### ✅ QWED-MCP IS:
+- **MCP Server** that adds verification tools to Claude Desktop and VS Code
+- **Deterministic** — uses SymPy (math), Z3 (logic), AST (code) for exact verification
+- **Open source** — works with any MCP-compatible AI assistant
+- **A safety layer** — catches LLM hallucinations in real-time
+
+### ❌ QWED-MCP is NOT:
+- ~~A replacement for Claude~~ — it enhances Claude with verification tools
+- ~~A chatbot~~ — it's a backend server that Claude calls
+- ~~Internet-connected~~ — all verification happens locally
+- ~~A fine-tuned model~~ — uses symbolic engines, not ML
+
+> **Think of QWED-MCP as giving Claude a "calculator" for math and a "theorem prover" for logic.**
+> 
+> Claude reasons. QWED-MCP verifies.
+
+---
+
+## 🆚 How We're Different from Other MCP Servers
+
+| Aspect | Other MCP Servers | QWED-MCP |
+|--------|-------------------|----------|
+| **Purpose** | Connect to APIs, databases, files | Verify LLM outputs |
+| **Approach** | Fetch external data | Compute deterministic proofs |
+| **Engines** | API wrappers | SymPy, Z3, AST analyzers |
+| **Accuracy** | Depends on data source | 100% mathematically proven |
+| **Offline** | Often need internet | Fully local, no APIs |
+
+### With Claude Desktop
+```
+┌───────────────────┐     ┌─────────────────┐     ┌──────────────────┐
+│      Claude       │ ──► │    QWED-MCP     │ ──► │  Verified Answer │
+│ "What's d/dx x³?" │     │ verify_math()   │     │    "3x²" ✓       │
+└───────────────────┘     └─────────────────┘     └──────────────────┘
+```
+
+---
+
+## 🔒 Security & Privacy
+
+> **All verification happens locally. Nothing is sent to external servers.**
+
+| Concern | QWED-MCP Approach |
+|---------|-------------------|
+| **Data Transmission** | ❌ No external API calls |
+| **Storage** | ❌ Nothing logged or stored |
+| **Dependencies** | ✅ Local engines (SymPy, Z3) |
+| **Code Analysis** | ✅ Your code never leaves your machine |
+
+**Perfect for:**
+- Enterprises with strict security policies
+- Air-gapped development environments
+- Sensitive code review workflows
+
+---
+
+## ❓ FAQ
+
+<details>
+<summary><b>Is QWED-MCP free?</b></summary>
+
+Yes! Open source under Apache 2.0. Use it commercially, modify it, distribute it.
+</details>
+
+<details>
+<summary><b>Does it work with VS Code Copilot?</b></summary>
+
+QWED-MCP works with any MCP-compatible client. VS Code with Claude extension supports MCP, so yes!
+</details>
+
+<details>
+<summary><b>Do I need an API key?</b></summary>
+
+No. QWED-MCP runs entirely locally. No API keys, no cloud calls.
+</details>
+
+<details>
+<summary><b>What's the difference between this and QWED-Core?</b></summary>
+
+QWED-Core is the Python library. QWED-MCP wraps it as an MCP server so Claude can use it as a tool.
+</details>
+
+<details>
+<summary><b>Can I add my own verification tools?</b></summary>
+
+Yes! The server is extensible. Fork it and add your custom `@mcp.tool()` functions.
+</details>
+
+---
+
+## 🗺️ Roadmap
+
+### ✅ Released (v1.0.0)
+- [x] `verify_math` — SymPy symbolic math
+- [x] `verify_logic` — Z3 SMT solver
+- [x] `verify_code` — Python AST security analysis
+- [x] `verify_sql` — SQL injection detection
+- [x] Claude Desktop integration
+- [x] Windows/macOS/Linux support
+
+### 🚧 In Progress
+- [ ] `verify_json` — JSON Schema validation tool
+- [ ] `verify_finance` — NPV/IRR/amortization tool
+- [ ] Cursor IDE integration guide
+
+### 🔮 Planned
+- [ ] `verify_legal` — Deadline and liability verification
+- [ ] `verify_statistics` — Hypothesis test validation
+- [ ] SSE (Server-Sent Events) transport for web UIs
+- [ ] TypeScript implementation
+
+---
+
 ## 📁 Examples
 
 See the [`examples/`](./examples) folder for:
