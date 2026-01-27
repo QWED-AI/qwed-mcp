@@ -12,8 +12,9 @@ from mcp.types import Tool, TextContent
 
 from .engines.math_engine import verify_math_expression
 from .engines.logic_engine import verify_logic_statement
-from .engines.code_engine import verify_code_safety
-from .engines.sql_engine import verify_sql_query
+# We remove the old mock imports for code/sql to use the real guards
+# from .engines.code_engine import verify_code_safety
+# from .engines.sql_engine import verify_sql_query
 
 # Import new Enterprise Guards
 try:
@@ -46,6 +47,18 @@ except ImportError:
     jurisdiction_guard = None
     statute_guard = None
     logging.warning("Legal Guards (qwed-legal) not found. Legal verification tools will be disabled.")
+
+# Import Technical Guards (Phase 12)
+try:
+    # Attempt to import from the qwed_new package structure
+    from qwed_new.guards.code_guard import CodeGuard
+    from qwed_new.guards.sql_guard import SQLGuard
+    code_guard = CodeGuard()
+    sql_guard = SQLGuard()
+except ImportError:
+    code_guard = None
+    sql_guard = None
+    logging.warning("Technical Guards (Code/SQL) not found. Tools will use mocks or fail.")
 
 # Import Core Attestation Guard
 try:
@@ -90,8 +103,6 @@ def register_tools(server: Server) -> None:
                     "required": ["message_json", "msg_type"]
                 }
             ),
-            # ... (Existing tools simplified for brevity if untouched, but I must replace the whole block if I use replace_file_content broadly or be specific)
-            # Im implementing ALL tools here to ensure nothing is lost if I replace the list.
             Tool(
                 name="verify_logic",
                 description="Verify logic using Z3.",
@@ -106,7 +117,7 @@ def register_tools(server: Server) -> None:
             ),
              Tool(
                 name="verify_code",
-                description="Verify code safety.",
+                description="Verify code safety using AST analysis (blocks eval, exec, dangerous imports).",
                 inputSchema={
                      "type": "object",
                      "properties": {
@@ -118,7 +129,7 @@ def register_tools(server: Server) -> None:
             ),
              Tool(
                 name="verify_sql",
-                description="Verify SQL query safety.",
+                description="Verify SQL query safety (blocks mutations like DROP based on policy).",
                 inputSchema={
                      "type": "object",
                      "properties": {
@@ -237,21 +248,31 @@ def register_tools(server: Server) -> None:
                     conclusion=arguments["conclusion"]
                 )
             elif name == "verify_code":
-                result = verify_code_safety(
-                    code=arguments["code"],
-                    language=arguments["language"]
-                )
+                if code_guard:
+                    guard_res = code_guard.verify_safety(arguments["code"])
+                    result = {
+                        "verified": guard_res["verified"],
+                        "message": guard_res.get("message") or "Code verified safe.",
+                        "violations": guard_res.get("violations")
+                    }
+                else:
+                    result = {"verified": False, "error": "CodeGuard not installed"}
+
             elif name == "verify_sql":
-                result = verify_sql_query(
-                    query=arguments["query"],
-                    allowed_tables=arguments.get("allowed_tables")
-                )
+                if sql_guard:
+                    guard_res = sql_guard.verify_query(arguments["query"])
+                    result = {
+                        "verified": guard_res["verified"],
+                        "message": guard_res.get("message") or "SQL verified safe.",
+                        "normalized": guard_res.get("normalized_query")
+                    }
+                else:
+                    result = {"verified": False, "error": "SQLGuard not installed"}
             
             # --- FINANCE ---
             elif name == "verify_banking_compliance":
                 if finance_guard is None: result = {"error": "qwed-finance missing"}
                 else:
-                    # .. reused logic ..
                     scenario = arguments["scenario"]
                     output_val = arguments["llm_output"]
                     if "Senior Citizen" in scenario and "0.5" in output_val:
@@ -368,6 +389,8 @@ def format_result(result: dict, signature_tool: str = "unknown") -> str:
         output += f"Issues: {result['issues']}\n"
     if "conflicts" in result and result["conflicts"]:
         output += f"Conflicts: {result['conflicts']}\n"
+    if "violations" in result and result["violations"]:
+        output += f"Violations: {result['violations']}\n"
         
     return output + signature_block
 
@@ -379,8 +402,9 @@ async def verify_logic(premises: list[str], conclusion: str) -> dict:
     return verify_logic_statement(premises, conclusion)
 
 async def verify_code(code: str, language: str) -> dict:
-    return verify_code_safety(code, language)
+    if code_guard: return code_guard.verify_safety(code)
+    return {"error": "CodeGuard missing"}
 
 async def verify_sql(query: str, allowed_tables: list[str] = None) -> dict:
-    return verify_sql_query(query, allowed_tables)
-
+    if sql_guard: return sql_guard.verify_query(query)
+    return {"error": "SQLGuard missing"}
