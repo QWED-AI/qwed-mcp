@@ -1,0 +1,17 @@
+{
+  "name": "legal_reasoning",
+  "description": "Generates a legally reasoned response using Self-Initiated Chain of Thought (CoT).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "facts": { "type": "string", "description": "The case facts." },
+      "question": { "type": "string", "description": "The legal question to answer." }
+    },
+    "required": ["facts", "question"]
+  },
+  "instruction": "You are a legal expert. To ensure Reasoned Elaboration, do not answer immediately. \n\n1. Autonomously construct a reasoning path based on the IRAC framework (Issue, Rule, Application, Conclusion).\n2. Explicitly label each section (e.g., 'Issue:', 'Rule:').\n3. Ensure the 'Application' section explicitly connects the facts to the rule.\n\nFacts: {{facts}}\nQuestion: {{question}}",
+  "verification_config": {
+    "tool": "verify_irac_structure",
+    "strict_mode": true
+  }
+}
