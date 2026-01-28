@@ -226,6 +226,40 @@ def register_tools(server: Server) -> None:
                     "required": ["claim_type", "jurisdiction", "incident_date", "filing_date"]
                 }
             ),
+            Tool(
+                name="verify_system_command",
+                description="Verify a shell command for security risks. Blocks dangerous commands (rm, sudo, curl|bash), path traversal, and command substitution. 100% deterministic (no LLM).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "The shell command to verify"},
+                    },
+                    "required": ["command"]
+                }
+            ),
+            Tool(
+                name="verify_file_path",
+                description="Verify if a file path is within allowed sandbox directories. Blocks access to sensitive paths like ~/.ssh, /etc/passwd. 100% deterministic (no LLM).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "filepath": {"type": "string", "description": "The file path to verify"},
+                        "allowed_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional list of allowed directories (default: /tmp, ./workspace)"},
+                    },
+                    "required": ["filepath"]
+                }
+            ),
+            Tool(
+                name="verify_config_secrets",
+                description="Scan configuration data for plaintext secrets (API keys, tokens, private keys). 100% deterministic (regex pattern matching).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "config_json": {"type": "string", "description": "JSON string of configuration to scan"},
+                    },
+                    "required": ["config_json"]
+                }
+            ),
         ]
     
     @server.call_tool()
@@ -341,6 +375,40 @@ def register_tools(server: Server) -> None:
                         arguments["filing_date"]
                     )
                     result = {"verified": res.verified, "message": res.message}
+
+            # --- SYSTEM INTEGRITY ---
+            elif name == "verify_system_command":
+                from qwed_sdk.guards.system_guard import SystemGuard
+                guard = SystemGuard()
+                res = guard.verify_shell_command(arguments["command"])
+                result = {
+                    "verified": res["verified"],
+                    "message": res.get("message", ""),
+                    "risk": res.get("risk"),
+                }
+            
+            elif name == "verify_file_path":
+                from qwed_sdk.guards.system_guard import SystemGuard
+                allowed = arguments.get("allowed_paths", ["/tmp", "./workspace"])
+                guard = SystemGuard(allowed_paths=allowed)
+                res = guard.verify_file_access(arguments["filepath"])
+                result = {
+                    "verified": res["verified"],
+                    "message": res.get("message", ""),
+                    "risk": res.get("risk"),
+                }
+            
+            elif name == "verify_config_secrets":
+                from qwed_sdk.guards.config_guard import ConfigGuard
+                import json
+                guard = ConfigGuard()
+                config_data = json.loads(arguments["config_json"])
+                res = guard.verify_config_safety(config_data)
+                result = {
+                    "verified": res["verified"],
+                    "message": res.get("message", ""),
+                    "violations": res.get("violations", []),
+                }
 
             else:
                 return [TextContent(type="text", text=f"Unknown tool: {name}")]
