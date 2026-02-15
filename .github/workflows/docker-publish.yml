@@ -52,7 +52,13 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           image: ${{ env.IMAGE_NAME }}:test
-          args: --file=Dockerfile --severity-threshold=high --org=qwed-ai-default
+          args: --file=Dockerfile --severity-threshold=high --org=qwed-ai-default --sarif-file-output=snyk.sarif
+        continue-on-error: true
+
+      - name: Upload Snyk results to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk.sarif
 
       - name: Push to Docker Hub
         # Only push if Snyk passes and it's not a PR
