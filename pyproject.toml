@@ -29,6 +29,7 @@ dependencies = [
     "httpx>=0.24.0",
     "qwed-finance>=1.2.0",
     "qwed-ucp>=0.2.0",
+    "sentry-sdk>=2.0.0",
 ]
 
 [project.optional-dependencies]
