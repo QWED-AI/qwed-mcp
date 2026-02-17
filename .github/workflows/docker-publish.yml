@@ -46,6 +46,35 @@ jobs:
           tags: ${{ env.IMAGE_NAME }}:test
           labels: ${{ steps.meta.outputs.labels }}
 
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0.18.0
+        with:
+          image: ${{ env.IMAGE_NAME }}:test
+          artifact-name: sbom.spdx.json
+          output-file: ./sbom.spdx.json
+
+      - name: Docker Scout
+        uses: docker/scout-action@v1
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          command: quickview
+          image: ${{ env.IMAGE_NAME }}:test
+          to: ${{ env.IMAGE_NAME }}:latest
+          ignore-unchanged: true
+          only-severities: critical,high
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker Scout CVEs
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: ${{ env.IMAGE_NAME }}:test
+          ignore-unchanged: true
+          only-severities: critical,high
+          exit-code: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Snyk Container Monitor
         uses: snyk/actions/docker@master
         env:
