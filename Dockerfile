@@ -22,9 +22,6 @@ RUN uv venv /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install dependencies only (cached unless pyproject.toml changes)
-RUN uv pip install --no-deps -r pyproject.toml || uv pip install .
-
 # Now copy source code and install the package
 COPY src/ src/
 RUN uv pip install .
