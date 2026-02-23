@@ -1,6 +1,7 @@
 import hashlib
 import json
 from datetime import datetime, timezone
+from typing import Any
 
 class AIBOMGenerator:
     """
@@ -8,7 +9,11 @@ class AIBOMGenerator:
     Source: Snyk AI-SPM requirements [Source 1484].
     """
     @staticmethod
-    def generate_manifest(llm_model: str, qwed_engines_used: list, mcp_tools_used: list) -> dict:
+    def generate_manifest(
+        llm_model: str, 
+        qwed_engines_used: list[str] | None = None, 
+        mcp_tools_used: list[str] | None = None
+    ) -> dict[str, Any]:
         if not llm_model:
             raise ValueError("llm_model must be a non-empty string")
         qwed_engines_used = qwed_engines_used or []

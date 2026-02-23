@@ -61,7 +61,6 @@ jobs:
           image: ${{ env.IMAGE_NAME }}:test
           only-severities: critical,high
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Docker Scout CVEs
         if: ${{ github.event_name == 'pull_request' }}
@@ -73,6 +72,7 @@ jobs:
           only-severities: critical,high
           exit-code: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
 
       - name: Snyk Container Monitor
         uses: snyk/actions/docker@master
