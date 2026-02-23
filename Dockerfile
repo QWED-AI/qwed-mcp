@@ -1,6 +1,6 @@
 
 # Use an official Python runtime as a parent image
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.11.11-slim-bookworm AS builder
 
 # Set work directory
 WORKDIR /app
@@ -10,8 +10,8 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv for fast package management
-RUN pip install uv
+# Install uv for fast package management and upgrade wheel to patch CVE-2026-24049
+RUN pip install "uv>=0.5.1" "wheel>=0.46.2"
 
 # Copy project files
 COPY pyproject.toml .
@@ -28,7 +28,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN uv pip install .
 
 # Runtime stage
-FROM python:3.11-slim-bookworm
+FROM python:3.11.11-slim-bookworm
 
 WORKDIR /app
 
