@@ -13,18 +13,20 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 # Install uv for fast package management and upgrade wheel to patch CVE-2026-24049
 RUN pip install "uv>=0.5.1" "wheel>=0.46.2"
 
-# Copy project files
+# Copy project files (dependencies only to optimize layer caching)
 COPY pyproject.toml .
 COPY README.md .
-COPY src/ src/
 
-# Create virtual environment and install dependencies
-# We install the package in editable mode or standard mode
+# Create virtual environment
 RUN uv venv /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install the package (including sentry-sdk and other deps from pyproject.toml)
+# Install dependencies only (cached unless pyproject.toml changes)
+RUN uv pip install --no-deps -r pyproject.toml || uv pip install .
+
+# Now copy source code and install the package
+COPY src/ src/
 RUN uv pip install .
 
 # Runtime stage
@@ -32,8 +34,10 @@ FROM python:3.11.11-slim-bookworm
 
 WORKDIR /app
 
-# Patch system-level vulnerabilities in runtime image
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+# Patch system-level vulnerabilities and log upgraded packages for AI-BOM audit trail
+RUN apt-get update && apt-get upgrade -y && \
+    dpkg-query -W -f='${Package} ${Version}\n' > /var/log/apt-upgraded-packages.txt && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv

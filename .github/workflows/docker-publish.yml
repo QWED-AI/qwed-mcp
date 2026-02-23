@@ -64,6 +64,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Docker Scout CVEs
+        # Soft-fail: surface critical/high CVEs in the PR without blocking the pipeline
         if: ${{ github.event_name == 'pull_request' }}
         uses: docker/scout-action@v1
         with:
