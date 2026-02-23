@@ -1,3 +1,6 @@
+import hashlib
+import copy
+import json
 from qwed_mcp.observability.aibom import AIBOMGenerator
 
 def test_aibom_generation_contains_required_fields():
@@ -25,14 +28,22 @@ def test_aibom_generation_contains_required_fields():
 def test_aibom_hash_is_deterministic_based_on_content():
     generator = AIBOMGenerator()
     
-    # We test that the hash is actually present and valid hex
     bom = generator.generate_manifest("claude-3-opus", [], ["search"])
     
-    assert len(bom["manifest_hash"]) == 64 # SHA256 length
+    assert len(bom["manifest_hash"]) == 64  # SHA256 length
     
-    # Optional: verify hash generation logic manually
-    import hashlib
-    bom_copy = bom.copy()
+    # Verify two calls with the same logical inputs yield the same hash
+    # (timestamp does not affect the hash serialization)
+    bom2 = generator.generate_manifest("claude-3-opus", [], ["search"])
+    assert bom["manifest_hash"] == bom2["manifest_hash"], (
+        "manifest_hash must be deterministic for identical inputs"
+    )
+    
+    # Also verify the stored hash matches a manual recomputation using JSON
+    bom_copy = copy.deepcopy(bom)
     del bom_copy["manifest_hash"]
-    expected_hash = hashlib.sha256(str(bom_copy).encode()).hexdigest()
+    del bom_copy["timestamp"]
+    expected_hash = hashlib.sha256(
+        json.dumps(bom_copy, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     assert bom["manifest_hash"] == expected_hash
