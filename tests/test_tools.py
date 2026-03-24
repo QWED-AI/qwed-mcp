@@ -1,5 +1,9 @@
+import os
 import pytest
 from qwed_mcp.tools import execute_python_code_tool
+
+# Ensure tests bypass the trusted mode execution guard
+os.environ["QWED_MCP_TRUSTED_CODE_EXECUTION"] = "true"
 
 @pytest.mark.asyncio
 async def test_execute_python_code_success():

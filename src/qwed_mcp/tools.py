@@ -94,6 +94,11 @@ def _format_output(stdout: str, stderr: str, returncode: int | None) -> str:
 
 async def execute_python_code_tool(arguments: dict[str, Any]) -> list[TextContent]:
     """Execute the provided python code in a subprocess."""
+    
+    trusted_mode = os.getenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "false").lower() == "true"
+    if not trusted_mode:
+        return [TextContent(type="text", text="Error: Code execution is disabled. The server admin must set QWED_MCP_TRUSTED_CODE_EXECUTION=true to enable this tool.")]
+        
     code = arguments.get("code", "")
     if not code:
         return [TextContent(type="text", text="Error: No code provided.")]
