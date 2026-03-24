@@ -1,13 +1,15 @@
 <div align="center">
   <img src="assets/logo.svg" alt="QWED Logo - AI Verification Engine" width="80" height="80">
-  <h1>QWED Protocol</h1>
-  <h3>Model Agnostic Verification Layer for AI</h3>
+  <h1>QWED-MCP 🔌</h1>
+  <h3>Deterministic Verification for Claude Desktop & VS Code</h3>
 
 [![PyPI](https://img.shields.io/pypi/v/qwed-mcp?color=blue&label=PyPI)](https://pypi.org/project/qwed-mcp/)
 [![Docker Verified](https://img.shields.io/badge/Docker-Verified_Publisher-blue.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification)
 [![Docker Scout](https://img.shields.io/badge/Docker-Scout_Analyzed-1D63ED.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification/tags)
 [![Cloudflare](https://img.shields.io/badge/Protected_by-Cloudflare-F38020?style=flat&logo=cloudflare&logoColor=white)](https://www.cloudflare.com/)
 [![Snyk Security](https://snyk.io/test/github/QWED-AI/qwed-mcp/badge.svg)](https://snyk.io/test/github/QWED-AI/qwed-mcp)
+[![Docs by Mintlify](https://img.shields.io/badge/Docs_by-Mintlify-0f1117?style=flat&logo=mintlify&logoColor=white)](https://docs.qwedai.com)
+[![Deploys by Netlify](https://img.shields.io/badge/Deploys_by-Netlify-00C7B7?style=flat&logo=netlify&logoColor=white)](https://www.netlify.com)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green)](https://modelcontextprotocol.io)
 [![GitHub stars](https://img.shields.io/github/stars/QWED-AI/qwed-mcp?style=social)](https://github.com/QWED-AI/qwed-mcp)
