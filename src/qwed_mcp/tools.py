@@ -42,7 +42,10 @@ async def _kill_process(proc: asyncio.subprocess.Process) -> None:
             logger.debug("Process already terminated")
         except Exception as e:
             logger.debug(f"Failed to kill process group: {e}, falling back to proc.kill()")
-            proc.kill()
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
     else:
         try:
             proc.kill()
@@ -153,6 +156,15 @@ async def execute_python_code_tool(arguments: dict[str, Any]) -> list[TextConten
             await _kill_process(proc)
             await _cleanup_script(script_path_obj)
             return [TextContent(type="text", text="Execution timed out after 30 seconds.")]
+        finally:
+            for stream_name in ('stdout', 'stderr', 'stdin'):
+                stream = getattr(proc, stream_name, None)
+                if stream:
+                    transport = getattr(stream, '_transport', None)
+                    if transport is not None:
+                        transport.close()
+                    elif hasattr(stream, 'close'):
+                        stream.close()
         
         await _cleanup_script(script_path_obj)
         final_output = _format_output(stdout, stderr, returncode)
