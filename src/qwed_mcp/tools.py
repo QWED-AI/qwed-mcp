@@ -8,8 +8,11 @@ LLMs will execute Python scripts directly using the pre-installed QWED SDKs.
 import logging
 import subprocess
 import os
-import tempfile
 import sys
+import anyio
+import asyncio
+import uuid
+import tempfile
 from typing import Any
 from mcp.server import Server
 from mcp.types import Tool, TextContent
@@ -23,42 +26,76 @@ async def execute_python_code_tool(arguments: dict[str, Any]) -> list[TextConten
         return [TextContent(type="text", text="Error: No code provided.")]
     
     try:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-            f.write(code)
-            script_path = f.name
+        temp_dir = anyio.Path(tempfile.gettempdir())
+        script_path_obj = temp_dir / f"qwed_exec_{uuid.uuid4().hex}.py"
+        await script_path_obj.write_text(code)
+        script_path = str(script_path_obj)
         
-        result = subprocess.run(
-            [sys.executable, script_path],
-            capture_output=True,
-            text=True,
-            timeout=30
+        # Create a restricted environment (stripping SENTRY_DSN, keys, etc.)
+        secure_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+            "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")  # Required on Windows
+        }
+
+        # Setup process group definition for Unix to cleanly kill child processes
+        popen_kwargs = {}
+        if sys.platform != "win32":
+            popen_kwargs["start_new_session"] = True
+
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, script_path,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=secure_env,
+            **popen_kwargs
         )
+
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+            stdout = stdout_bytes.decode('utf-8', errors='replace') if stdout_bytes else ""
+            stderr = stderr_bytes.decode('utf-8', errors='replace') if stderr_bytes else ""
+            returncode = proc.returncode
+        except asyncio.TimeoutError:
+            # Cleanly kill the entire process group to prevent orphaned children
+            if sys.platform != "win32":
+                import signal
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except Exception:
+                    proc.kill()
+            else:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+            await proc.communicate()
+            
+            if await script_path_obj.exists():
+                await script_path_obj.unlink()
+            return [TextContent(type="text", text="Execution timed out after 30 seconds.")]
         
-        if os.path.exists(script_path):
-            os.remove(script_path)
+        if await script_path_obj.exists():
+            await script_path_obj.unlink()
         
         output_parts = []
-        if result.stdout:
-            output_parts.append("STDOUT:\n" + result.stdout.strip())
-        if result.stderr:
-            output_parts.append("STDERR:\n" + result.stderr.strip())
+        if stdout:
+            output_parts.append("STDOUT:\n" + stdout.strip())
+        if stderr:
+            output_parts.append("STDERR:\n" + stderr.strip())
             
-        if result.returncode != 0:
-            output_parts.append(f"\nExecution failed with return code {result.returncode}")
+        if returncode != 0:
+            output_parts.append(f"\nExecution failed with return code {returncode}")
         else:
             output_parts.append("\nExecution completed successfully.")
             
         final_output = "\n\n".join(output_parts).strip()
         return [TextContent(type="text", text=final_output)]
         
-    except subprocess.TimeoutExpired:
-        if 'script_path' in locals() and os.path.exists(script_path):
-            os.remove(script_path)
-        return [TextContent(type="text", text="Execution timed out after 30 seconds.")]
     except Exception as e:
         logger.error(f"Error executing code: {e}")
-        if 'script_path' in locals() and os.path.exists(script_path):
-            os.remove(script_path)
+        if 'script_path_obj' in locals() and await script_path_obj.exists():
+            await script_path_obj.unlink()
         return [TextContent(type="text", text=f"Execution error: {str(e)}")]
 
 
