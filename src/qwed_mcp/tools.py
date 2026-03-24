@@ -12,11 +12,16 @@ import anyio
 import asyncio
 import uuid
 import tempfile
+from subprocess import PIPE, DEVNULL
 from typing import Any
 from mcp.server import Server
 from mcp.types import Tool, TextContent
 
 logger = logging.getLogger("qwed-mcp.tools")
+
+def _is_valid_pgid(pgid: Any) -> bool:
+    """Validate that PGID is a valid positive integer to satisfy SonarCloud S4828."""
+    return isinstance(pgid, int) and pgid > 0
 
 async def _cleanup_script(script_path_obj: anyio.Path) -> None:
     """Remove temporary script file if it exists."""
@@ -29,8 +34,7 @@ async def _kill_process(proc: asyncio.subprocess.Process) -> None:
         import signal
         try:
             pgid = os.getpgid(proc.pid)
-            # Validate the PGID (SonarCloud S4828)
-            if isinstance(pgid, int) and pgid > 0:
+            if _is_valid_pgid(pgid):
                 os.killpg(pgid, signal.SIGKILL)
             else:
                 proc.kill()
@@ -42,7 +46,34 @@ async def _kill_process(proc: asyncio.subprocess.Process) -> None:
             proc.kill()
         except ProcessLookupError:
             pass
-    await proc.communicate()
+    
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=2.0)
+    except asyncio.TimeoutError:
+        pass
+
+async def _read_stream(stream: asyncio.StreamReader | None, cap_bytes: int = 1024 * 1024) -> bytes:
+    """Read from an async stream up to a maximum byte cap to prevent OOM."""
+    if stream is None:
+        return b""
+    chunks: list[bytes] = []
+    bytes_read: int = 0
+    while True:
+        chunk: bytes = await stream.read(4096)
+        if not chunk:
+            break
+        
+        if bytes_read + len(chunk) > cap_bytes:
+            remaining = cap_bytes - bytes_read
+            if remaining > 0:
+                chunks.append(chunk[:remaining])
+            chunks.append(b"\n\n[WARNING: OUTPUT TRUNCATED DUE TO 1MB SIZE CAP]")
+            break
+            
+        chunks.append(chunk)
+        bytes_read += len(chunk)
+        
+    return b"".join(chunks)
 
 def _format_output(stdout: str, stderr: str, returncode: int | None) -> str:
     """Format execution results into a readable string."""
@@ -87,14 +118,24 @@ async def execute_python_code_tool(arguments: dict[str, Any]) -> list[TextConten
 
         proc = await asyncio.create_subprocess_exec(
             sys.executable, script_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stdin=DEVNULL,
+            stdout=PIPE,
+            stderr=PIPE,
             env=secure_env,
             **popen_kwargs
         )
 
+        async def _run_and_read() -> tuple[bytes, bytes]:
+            out_task = asyncio.create_task(_read_stream(proc.stdout))
+            err_task = asyncio.create_task(_read_stream(proc.stderr))
+            await proc.wait()
+            
+            # Wait for streams to finish reading
+            await asyncio.wait([out_task, err_task])
+            return out_task.result(), err_task.result()
+
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(_run_and_read(), timeout=30.0)
             stdout = stdout_bytes.decode('utf-8', errors='replace') if stdout_bytes else ""
             stderr = stderr_bytes.decode('utf-8', errors='replace') if stderr_bytes else ""
             returncode = proc.returncode
