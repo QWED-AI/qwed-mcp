@@ -28,7 +28,12 @@ async def _kill_process(proc: asyncio.subprocess.Process) -> None:
     if sys.platform != "win32":
         import signal
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            pgid = os.getpgid(proc.pid)
+            # Validate the PGID (SonarCloud S4828)
+            if isinstance(pgid, int) and pgid > 0:
+                os.killpg(pgid, signal.SIGKILL)
+            else:
+                proc.kill()
         except Exception as e:
             logger.debug(f"Failed to kill process group: {e}, falling back to proc.kill()")
             proc.kill()
