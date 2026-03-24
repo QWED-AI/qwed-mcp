@@ -98,7 +98,7 @@ If you see an `"Unknown tool"` error, it means Claude is trying to use a legacy 
 
 | Tool | Description | Use Case |
 |------|-------------|----------|
-| `execute_python_code` | **Unified Execution Sandbox** | The single entrypoint for all QWED capabilities. Executes dynamically generated Python code in an isolated environment with all SDKs pre-installed. |
+| `execute_python_code` | **Subprocess Execution** | The single entrypoint for all QWED capabilities. Executes dynamically generated Python code in a subprocess with restricted environment variables. Note: Runs with server privileges; ensure inputs are trusted. |
 
 ---
 
@@ -107,19 +107,19 @@ If you see an `"Unknown tool"` error, it means Claude is trying to use a legacy 
 > **Note:** Claude already knows how to use QWED natively via standard Python imports.
 
 ### Financial Calculations
-```
+```text
 A bank says: "Invest $10,000 at 7.5% compounded quarterly for 5 years = $14,356.29"
 Please write a short Python script using the standard compound interest formula to verify this, and run it with execute_python_code.
 ```
 
 ### Loan EMI Verification
-```
+```text
 Verify: ₹10,00,000 loan at 9% for 5 years = EMI of ₹20,758
 Write a python script importing necessary tools to verify this EMI calculation, and execute it using execute_python_code.
 ```
 
 ### Complex Reasoning Workflows (The Power of Python)
-```
+```text
 Read the user terms in the attached document. 
 1. Use execute_python_code to extract and verify the legal clauses using qwed_legal.
 2. In the same script, verify if the referenced financial penalties align with the allowed boundaries.
@@ -140,7 +140,7 @@ Read the user terms in the attached document.
 │           QWED-MCP Server                 │
 ├───────────────────────────────────────────┤
 │ execute_python_code()                     │
-│  └─► Isolated subprocess (sandboxed)      │
+│  └─► Subprocess Execution (Restricted Env)│
 │       └─► Native QWED library execution   │
 └───────────────────────────────────────────┘
 ```
@@ -149,12 +149,14 @@ Read the user terms in the attached document.
 
 ## 🎯 Why QWED-MCP?
 
+> *Note: Subprocess execution provides answers/checks purely based on what QWED SDK methods are invoked inside the executed scripts. Execution itself does not guarantee injection detection without specific SDK calls.*
+
 | Without QWED-MCP | With QWED-MCP |
 |------------------|---------------|
-| LLM calculates → 95% correct | Executes Python script → **100% correct** |
-| LLM writes SQL → might inject | Sandbox execution → **injection detected** |
-| LLM reasons → might be wrong | Z3 solver executed → **formally proven** |
-| LLM codes → might be unsafe | AST check script → **security checked** |
+| LLM calculates → 95% correct | Executes Python script calling `qwed_finance` → **100% correct** |
+| LLM writes SQL → might inject | Script uses `qwed_new` analyzer → **injection detected** |
+| LLM reasons → might be wrong | Z3 solver executed via SDK → **formally proven** |
+| LLM codes → might be unsafe | AST check script executed → **security checked** |
 
 ---
 
@@ -254,10 +256,10 @@ Yes! The server is extensible. Fork it and add your custom `@mcp.tool()` functio
 
 ## 🗺️ Roadmap
 
-### ✅ Released (v2.0)
+### ✅ Released (v0.2.0)
 - [x] Context bloat resolution (RFC-9728 compatibility)
 - [x] Unified `execute_python_code` environment
-- [x] Secure process isolation and robust timeouts
+- [x] Secure process isolation (env-restricted) and robust timeouts
 - [x] Claude Desktop integration
 - [x] Windows/macOS/Linux support
 
