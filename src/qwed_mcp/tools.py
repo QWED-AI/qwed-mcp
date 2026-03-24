@@ -46,7 +46,7 @@ async def _kill_process(proc: asyncio.subprocess.Process) -> None:
     else:
         try:
             proc.kill()
-        except (ProcessLookupError, OSError):
+        except OSError:
             pass
     
     try:
