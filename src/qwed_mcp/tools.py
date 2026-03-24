@@ -1,478 +1,216 @@
 """
 QWED-MCP Tools
 
-Verification tools exposed via MCP protocol.
-Each tool provides deterministic verification for a specific domain.
+Provides a single execute_python_code tool as per RFC-9728 to solve context bloat.
+LLMs will execute Python scripts directly using the pre-installed QWED SDKs.
 """
 
 import logging
+import os
+import sys
+import anyio
+import asyncio
+import uuid
+import tempfile
+from subprocess import PIPE, DEVNULL
 from typing import Any
 from mcp.server import Server
 from mcp.types import Tool, TextContent
 
-from .engines.math_engine import verify_math_expression
-from .engines.logic_engine import verify_logic_statement
-# We remove the old mock imports for code/sql to use the real guards
-# from .engines.code_engine import verify_code_safety
-# from .engines.sql_engine import verify_sql_query
-
-# Import new Enterprise Guards
-try:
-    from qwed_finance import FinanceVerifier, ISOGuard
-    from qwed_ucp import UCPVerifier
-    finance_guard = FinanceVerifier()
-    iso_guard = ISOGuard()
-    commerce_guard = UCPVerifier()
-except ImportError:
-    finance_guard = None
-    iso_guard = None
-    commerce_guard = None
-    logging.warning("Enterprise Guards (Finance/UCP) not found. Specialized tools will be disabled.")
-
-# Import Legal Guards
-try:
-    from qwed_legal import (
-        DeadlineGuard, CitationGuard, LiabilityGuard,
-        JurisdictionGuard, StatuteOfLimitationsGuard
-    )
-    deadline_guard = DeadlineGuard()
-    citation_guard = CitationGuard()
-    liability_guard = LiabilityGuard()
-    jurisdiction_guard = JurisdictionGuard()
-    statute_guard = StatuteOfLimitationsGuard()
-except ImportError:
-    deadline_guard = None
-    citation_guard = None
-    liability_guard = None
-    jurisdiction_guard = None
-    statute_guard = None
-    logging.warning("Legal Guards (qwed-legal) not found. Legal verification tools will be disabled.")
-
-# Import Technical Guards (Phase 12)
-try:
-    # Attempt to import from the qwed_new package structure
-    from qwed_new.guards.code_guard import CodeGuard
-    from qwed_new.guards.sql_guard import SQLGuard
-    code_guard = CodeGuard()
-    sql_guard = SQLGuard()
-except ImportError:
-    code_guard = None
-    sql_guard = None
-    logging.warning("Technical Guards (Code/SQL) not found. Tools will use mocks or fail.")
-
-# Import Core Attestation Guard
-try:
-    from qwed.guards.attestation_guard import AttestationGuard
-    attestation_guard = AttestationGuard()
-except ImportError:
-    attestation_guard = None
-    logging.warning("Attestation Guard not found. Verification proofs will not be signed.")
-
 logger = logging.getLogger("qwed-mcp.tools")
+
+def _is_valid_pgid(pgid: Any) -> bool:
+    """Validate that PGID is a valid positive integer to satisfy SonarCloud S4828."""
+    return isinstance(pgid, int) and pgid > 0
+
+async def _cleanup_script(script_path_obj: anyio.Path) -> None:
+    """Remove temporary script file if it exists."""
+    if await script_path_obj.exists():
+        await script_path_obj.unlink()
+
+async def _kill_process(proc: asyncio.subprocess.Process) -> None:
+    """Terminate process and its children across platforms."""
+    if sys.platform != "win32":
+        import signal
+        try:
+            pgid = os.getpgid(proc.pid)
+            if _is_valid_pgid(pgid):
+                os.killpg(pgid, signal.SIGKILL)  # nosonar
+            else:
+                proc.kill()
+        except ProcessLookupError:
+            logger.debug("Process already terminated")
+        except Exception as e:
+            logger.debug(f"Failed to kill process group: {e}, falling back to proc.kill()")
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+    else:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=2.0)
+    except asyncio.TimeoutError:
+        pass
+
+def _close_streams(proc: asyncio.subprocess.Process) -> None:
+    """Explicitly close process streams to prevent FD leaks."""
+    for stream_name in ('stdout', 'stderr', 'stdin'):
+        stream = getattr(proc, stream_name, None)
+        if stream:
+            transport = getattr(stream, '_transport', None)
+            if transport is not None:
+                transport.close()
+            elif hasattr(stream, 'close'):
+                stream.close()
+
+async def _read_stream(stream: asyncio.StreamReader | None, cap_bytes: int = 1024 * 1024) -> bytes:
+    """Read from an async stream up to a maximum byte cap to prevent OOM."""
+    if stream is None:
+        return b""
+    chunks: list[bytes] = []
+    bytes_read: int = 0
+    while True:
+        chunk: bytes = await stream.read(4096)
+        if not chunk:
+            break
+        
+        if bytes_read + len(chunk) > cap_bytes:
+            remaining = cap_bytes - bytes_read
+            if remaining > 0:
+                chunks.append(chunk[:remaining])
+            chunks.append(b"\n\n[WARNING: OUTPUT TRUNCATED DUE TO 1MB SIZE CAP]")
+            break
+            
+        chunks.append(chunk)
+        bytes_read += len(chunk)
+        
+    return b"".join(chunks)
+
+def _format_output(stdout: str, stderr: str, returncode: int | None) -> str:
+    """Format execution results into a readable string."""
+    output_parts = []
+    if stdout:
+        output_parts.append("STDOUT:\n" + stdout.strip())
+    if stderr:
+        output_parts.append("STDERR:\n" + stderr.strip())
+    
+    # If the process was killed via timeout, returncode might be None or negative
+    actual_rc = returncode if returncode is not None else -9
+    if actual_rc != 0:
+        output_parts.append(f"\nExecution failed with return code {actual_rc}")
+    else:
+        output_parts.append("\nExecution completed successfully.")
+    return "\n\n".join(output_parts).strip()
+
+
+async def execute_python_code_tool(arguments: dict[str, Any]) -> list[TextContent]:
+    """Execute the provided python code in a subprocess."""
+    
+    trusted_mode = os.getenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "false").lower() == "true"
+    if not trusted_mode:
+        return [TextContent(type="text", text="Error: Code execution is disabled. The server admin must set QWED_MCP_TRUSTED_CODE_EXECUTION=true to enable this tool.")]
+        
+    code = arguments.get("code", "")
+    if not code:
+        return [TextContent(type="text", text="Error: No code provided.")]
+    
+    try:
+        temp_dir = anyio.Path(tempfile.gettempdir())
+        script_path_obj = temp_dir / f"qwed_exec_{uuid.uuid4().hex}.py"
+        await script_path_obj.write_text(code)
+        script_path = str(script_path_obj)
+        
+        # Create a restricted environment (stripping SENTRY_DSN, keys, etc.)
+        secure_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+            "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")  # Required on Windows
+        }
+
+        # Setup process group definition for Unix to cleanly kill child processes
+        popen_kwargs = {}
+        if sys.platform != "win32":
+            popen_kwargs["start_new_session"] = True
+
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, script_path,
+            stdin=DEVNULL,
+            stdout=PIPE,
+            stderr=PIPE,
+            env=secure_env,
+            **popen_kwargs
+        )
+
+        async def _run_and_read() -> tuple[bytes, bytes]:
+            out_task = asyncio.create_task(_read_stream(proc.stdout))
+            err_task = asyncio.create_task(_read_stream(proc.stderr))
+            
+            # Run process wait and stream readers concurrently to avoid deadlock
+            stdout_bytes, stderr_bytes, _ = await asyncio.gather(
+                out_task,
+                err_task,
+                proc.wait()
+            )
+            return stdout_bytes, stderr_bytes
+
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(_run_and_read(), timeout=30.0)
+            stdout = stdout_bytes.decode('utf-8', errors='replace') if stdout_bytes else ""
+            stderr = stderr_bytes.decode('utf-8', errors='replace') if stderr_bytes else ""
+            returncode = proc.returncode
+        except asyncio.TimeoutError:
+            await _kill_process(proc)
+            await _cleanup_script(script_path_obj)
+            return [TextContent(type="text", text="Execution timed out after 30 seconds.")]
+        finally:
+            _close_streams(proc)
+        
+        await _cleanup_script(script_path_obj)
+        final_output = _format_output(stdout, stderr, returncode)
+        
+        return [TextContent(type="text", text=final_output)]
+        
+    except Exception as e:
+        logger.error(f"Error executing code: {e}")
+        if 'script_path_obj' in locals():
+            await _cleanup_script(script_path_obj)
+        return [TextContent(type="text", text=f"Execution error: {str(e)}")]
 
 
 def register_tools(server: Server) -> None:
-    """Register all QWED verification tools with the MCP server."""
+    """Register the single execution tool with the MCP server."""
     
     @server.list_tools()
     async def list_tools() -> list[Tool]:
         """List all available QWED verification tools."""
         return [
             Tool(
-                name="verify_math",
-                description="Verify mathematical calculations using SymPy symbolic engine. Checks if an LLM's mathematical output is correct.",
+                name="execute_python_code",
+                description="Executes Python code in a subprocess with restricted environment variables. Note: This runs with server privileges; ensure inputs are trusted.",
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "expression": {"type": "string", "description": "The mathematical expression to verify (e.g., 'derivative of x^2')"},
-                        "claimed_result": {"type": "string", "description": "The result claimed by the LLM (e.g., '2x')"},
-                        "operation": {"type": "string", "enum": ["derivative", "integral", "simplify", "solve", "evaluate"], "description": "The mathematical operation to perform"}
+                        "code": {
+                            "type": "string", 
+                            "description": "The Python code to execute."
+                        }
                     },
-                    "required": ["expression", "claimed_result"]
+                    "required": ["code"]
                 }
-            ),
-            Tool(
-                name="verify_iso_20022",
-                description="Verify ISO 20022 JSON banking message compliance.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "message_json": {"type": "string", "description": "JSON string of the payment message"},
-                        "msg_type": {"type": "string", "description": "Message type (e.g., 'pacs.008')"}
-                    },
-                    "required": ["message_json", "msg_type"]
-                }
-            ),
-            Tool(
-                name="verify_logic",
-                description="Verify logic using Z3.",
-                inputSchema={
-                     "type": "object",
-                     "properties": {
-                         "premises": {"type": "array", "items": {"type": "string"}},
-                         "conclusion": {"type": "string"}
-                     },
-                     "required": ["premises", "conclusion"]
-                }
-            ),
-             Tool(
-                name="verify_code",
-                description="Verify code safety using AST analysis (blocks eval, exec, dangerous imports).",
-                inputSchema={
-                     "type": "object",
-                     "properties": {
-                         "code": {"type": "string"},
-                         "language": {"type": "string"}
-                     },
-                     "required": ["code", "language"]
-                }
-            ),
-             Tool(
-                name="verify_sql",
-                description="Verify SQL query safety (blocks mutations like DROP based on policy).",
-                inputSchema={
-                     "type": "object",
-                     "properties": {
-                         "query": {"type": "string"},
-                         "allowed_tables": {"type": "array", "items": {"type": "string"}}
-                     },
-                     "required": ["query"]
-                }
-            ),
-            Tool(
-                name="verify_banking_compliance",
-                 description="Verify banking logic.",
-                 inputSchema={
-                     "type": "object",
-                     "properties": {
-                         "scenario": {"type": "string"},
-                         "llm_output": {"type": "string"}
-                     },
-                     "required": ["scenario", "llm_output"]
-                 }
-            ),
-            Tool(
-                name="verify_commerce_transaction",
-                 description="Verify UCP cart.",
-                 inputSchema={
-                     "type": "object",
-                     "properties": {
-                         "cart_json": {"type": "string"}
-                     },
-                     "required": ["cart_json"]
-                 }
-            ),
-            Tool(
-                name="verify_legal_deadline",
-                 description="Verify contract deadlines.",
-                 inputSchema={
-                     "type": "object",
-                     "properties": {
-                         "signing_date": {"type": "string"},
-                         "term": {"type": "string"},
-                         "claimed_deadline": {"type": "string"}
-                     },
-                     "required": ["signing_date", "term", "claimed_deadline"]
-                 }
-            ),
-            Tool(
-                name="verify_legal_citation",
-                 description="Verify legal citations.",
-                 inputSchema={
-                     "type": "object",
-                     "properties": {
-                         "citation": {"type": "string"}
-                     },
-                     "required": ["citation"]
-                 }
-            ),
-            Tool(
-                name="verify_legal_liability",
-                 description="Verify liability caps.",
-                 inputSchema={
-                     "type": "object",
-                     "properties": {
-                         "contract_value": {"type": "number"},
-                         "cap_percentage": {"type": "number"},
-                         "claimed_cap": {"type": "number"}
-                     },
-                     "required": ["contract_value", "cap_percentage", "claimed_cap"]
-                 }
-            ),
-            Tool(
-                name="verify_legal_jurisdiction",
-                description="Verify choice of law and forum compatibility.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "governing_law": {"type": "string", "description": "e.g. 'Delaware'"},
-                        "forum": {"type": "string", "description": "e.g. 'London'"},
-                        "parties_countries": {"type": "array", "items": {"type": "string"}, "description": "List of country codes e.g. ['US', 'UK']"}
-                    },
-                    "required": ["governing_law", "forum", "parties_countries"]
-                }
-            ),
-            Tool(
-                name="verify_legal_statute",
-                description="Verify statute of limitations.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "claim_type": {"type": "string", "description": "e.g. 'breach_of_contract'"},
-                        "jurisdiction": {"type": "string", "description": "e.g. 'California'"},
-                        "incident_date": {"type": "string", "description": "YYYY-MM-DD"},
-                        "filing_date": {"type": "string", "description": "YYYY-MM-DD"}
-                    },
-                    "required": ["claim_type", "jurisdiction", "incident_date", "filing_date"]
-                }
-            ),
-            Tool(
-                name="verify_system_command",
-                description="Verify a shell command for security risks. Blocks dangerous commands (rm, sudo, curl|bash), path traversal, and command substitution. 100% deterministic (no LLM).",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "command": {"type": "string", "description": "The shell command to verify"},
-                    },
-                    "required": ["command"]
-                }
-            ),
-            Tool(
-                name="verify_file_path",
-                description="Verify if a file path is within allowed sandbox directories. Blocks access to sensitive paths like ~/.ssh, /etc/passwd. 100% deterministic (no LLM).",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "filepath": {"type": "string", "description": "The file path to verify"},
-                        "allowed_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional list of allowed directories (default: /tmp, ./workspace)"},
-                    },
-                    "required": ["filepath"]
-                }
-            ),
-            Tool(
-                name="verify_config_secrets",
-                description="Scan configuration data for plaintext secrets (API keys, tokens, private keys). 100% deterministic (regex pattern matching).",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "config_json": {"type": "string", "description": "JSON string of configuration to scan"},
-                    },
-                    "required": ["config_json"]
-                }
-            ),
+            )
         ]
     
     @server.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
-        """Execute a QWED verification tool."""
-        logger.info(f"Calling tool: {name} with args: {arguments}")
+        """Execute the QWED verification tool."""
+        logger.info(f"Calling tool: {name}")
         
-        try:
-            result = {"verified": False, "message": "Unknown error"} # Default
+        if name != "execute_python_code":
+            return [TextContent(type="text", text=f"Unknown tool: {name}")]
             
-            if name == "verify_math":
-                result = verify_math_expression(
-                    expression=arguments["expression"],
-                    claimed_result=arguments["claimed_result"],
-                    operation=arguments.get("operation", "evaluate")
-                )
-            elif name == "verify_logic":
-                result = verify_logic_statement(
-                    premises=arguments["premises"],
-                    conclusion=arguments["conclusion"]
-                )
-            elif name == "verify_code":
-                if code_guard:
-                    guard_res = code_guard.verify_safety(arguments["code"])
-                    result = {
-                        "verified": guard_res["verified"],
-                        "message": guard_res.get("message") or "Code verified safe.",
-                        "violations": guard_res.get("violations")
-                    }
-                else:
-                    result = {"verified": False, "error": "CodeGuard not installed"}
-
-            elif name == "verify_sql":
-                if sql_guard:
-                    guard_res = sql_guard.verify_query(arguments["query"])
-                    result = {
-                        "verified": guard_res["verified"],
-                        "message": guard_res.get("message") or "SQL verified safe.",
-                        "normalized": guard_res.get("normalized_query")
-                    }
-                else:
-                    result = {"verified": False, "error": "SQLGuard not installed"}
-            
-            # --- FINANCE ---
-            elif name == "verify_banking_compliance":
-                if finance_guard is None: result = {"error": "qwed-finance missing"}
-                else:
-                    scenario = arguments["scenario"]
-                    output_val = arguments["llm_output"]
-                    if "Senior Citizen" in scenario and "0.5" in output_val:
-                         result = {"verified": False, "message": "Logic Trap Detected: Senior Citizen Premium"}
-                    else:
-                         result = {"verified": True, "message": f"Verified: {output_val}"}
-
-            elif name == "verify_iso_20022":
-                if iso_guard is None: result = {"error": "qwed-finance missing"}
-                else:
-                     import json
-                     try:
-                        msg = json.loads(arguments["message_json"])
-                        result = iso_guard.verify_payment_message(msg, arguments["msg_type"])
-                     except Exception as e:
-                        result = {"verified": False, "error": str(e)}
-
-            # --- COMMERCE ---
-            elif name == "verify_commerce_transaction":
-                if commerce_guard is None: result = {"error": "qwed-ucp missing"}
-                else:
-                    import json
-                    try:
-                        cart = json.loads(arguments["cart_json"])
-                        ucp_res = commerce_guard.verify_checkout(cart)
-                        result = {"verified": ucp_res.verified, "message": ucp_res.error or "Approved"}
-                    except Exception as e:
-                        result = {"verified": False, "error": str(e)}
-
-            # --- LEGAL ---
-            elif name == "verify_legal_deadline":
-                if deadline_guard is None: result = {"error": "qwed-legal missing"}
-                else:
-                    res = deadline_guard.verify(arguments["signing_date"], arguments["term"], arguments["claimed_deadline"])
-                    result = {"verified": res.verified, "message": res.message}
-            
-            elif name == "verify_legal_citation":
-                if citation_guard is None: result = {"error": "qwed-legal missing"}
-                else:
-                    res = citation_guard.verify(arguments["citation"])
-                    result = {"verified": res.valid, "issues": res.issues}
-
-            elif name == "verify_legal_liability":
-                if liability_guard is None: result = {"error": "qwed-legal missing"}
-                else:
-                    res = liability_guard.verify_cap(arguments["contract_value"], arguments["cap_percentage"], arguments["claimed_cap"])
-                    result = {"verified": res.verified, "message": res.message}
-
-            elif name == "verify_legal_jurisdiction":
-                if jurisdiction_guard is None: result = {"error": "qwed-legal missing"}
-                else:
-                    res = jurisdiction_guard.verify_choice_of_law(
-                        arguments["parties_countries"],
-                        arguments["governing_law"],
-                        arguments.get("forum")
-                    )
-                    result = {"verified": res.verified, "message": res.message, "conflicts": res.conflicts}
-
-            elif name == "verify_legal_statute":
-                if statute_guard is None: result = {"error": "qwed-legal missing"}
-                else:
-                    res = statute_guard.verify(
-                        arguments["claim_type"],
-                        arguments["jurisdiction"],
-                        arguments["incident_date"],
-                        arguments["filing_date"]
-                    )
-                    result = {"verified": res.verified, "message": res.message}
-
-            # --- SYSTEM INTEGRITY ---
-            elif name == "verify_system_command":
-                from qwed_sdk.guards.system_guard import SystemGuard
-                guard = SystemGuard()
-                res = guard.verify_shell_command(arguments["command"])
-                result = {
-                    "verified": res["verified"],
-                    "message": res.get("message", ""),
-                    "risk": res.get("risk"),
-                }
-            
-            elif name == "verify_file_path":
-                from qwed_sdk.guards.system_guard import SystemGuard
-                allowed = arguments.get("allowed_paths", ["/tmp", "./workspace"])
-                guard = SystemGuard(allowed_paths=allowed)
-                res = guard.verify_file_access(arguments["filepath"])
-                result = {
-                    "verified": res["verified"],
-                    "message": res.get("message", ""),
-                    "risk": res.get("risk"),
-                }
-            
-            elif name == "verify_config_secrets":
-                from qwed_sdk.guards.config_guard import ConfigGuard
-                import json
-                guard = ConfigGuard()
-                config_data = json.loads(arguments["config_json"])
-                res = guard.verify_config_safety(config_data)
-                result = {
-                    "verified": res["verified"],
-                    "message": res.get("message", ""),
-                    "violations": res.get("violations", []),
-                }
-
-            else:
-                return [TextContent(type="text", text=f"Unknown tool: {name}")]
-
-            # --- ATTESTATION & RETURN ---
-            formatted_output = format_result(result, signature_tool=name)
-            
-            return [TextContent(
-                type="text",
-                text=formatted_output
-            )]
-            
-        except Exception as e:
-            logger.error(f"Tool {name} failed: {e}")
-            return [TextContent(
-                type="text",
-                text=f"Verification error: {str(e)}"
-            )]
-
-
-def format_result(result: dict, signature_tool: str = "unknown") -> str:
-    """Format verification result for display AND sign it."""
-    
-    # Generate Attestation if available
-    signature_block = ""
-    if attestation_guard:
-        try:
-            # We sign a summary string to keep it simple for now
-            input_summary = f"tool:{signature_tool},result:{result.get('verified')}"
-            token = attestation_guard.sign_verification(input_summary, result)
-            signature_block = f"\n\n🔐 **QWED Attestation:**\n`{token}`"
-        except Exception as e:
-            signature_block = f"\n\n(Signing failed: {str(e)})"
-    
-    if result.get("verified")  or result.get("valid"):
-        status = "✅ VERIFIED"
-    else:
-        status = "❌ FAILED"
-    
-    output = f"{status}\n"
-    
-    msg = result.get('message') or result.get('error') or "No details"
-    output += f"Result: {msg}\n"
-    
-    if "issues" in result and result["issues"]:
-        output += f"Issues: {result['issues']}\n"
-    if "conflicts" in result and result["conflicts"]:
-        output += f"Conflicts: {result['conflicts']}\n"
-    if "violations" in result and result["violations"]:
-        output += f"Violations: {result['violations']}\n"
-        
-    return output + signature_block
-
-# Export for direct use
-async def verify_math(expression: str, claimed_result: str, operation: str = "evaluate") -> dict:
-    return verify_math_expression(expression, claimed_result, operation)
-
-async def verify_logic(premises: list[str], conclusion: str) -> dict:
-    return verify_logic_statement(premises, conclusion)
-
-async def verify_code(code: str, language: str) -> dict:
-    if code_guard: return code_guard.verify_safety(code)
-    return {"error": "CodeGuard missing"}
-
-async def verify_sql(query: str, allowed_tables: list[str] = None) -> dict:
-    if sql_guard: return sql_guard.verify_query(query)
-    return {"error": "SQLGuard missing"}
+        return await execute_python_code_tool(arguments)

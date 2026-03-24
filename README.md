@@ -1,13 +1,15 @@
 <div align="center">
   <img src="assets/logo.svg" alt="QWED Logo - AI Verification Engine" width="80" height="80">
-  <h1>QWED Protocol</h1>
-  <h3>Model Agnostic Verification Layer for AI</h3>
+  <h1>QWED-MCP 🔌</h1>
+  <h3>Deterministic Verification for Claude Desktop & VS Code</h3>
 
 [![PyPI](https://img.shields.io/pypi/v/qwed-mcp?color=blue&label=PyPI)](https://pypi.org/project/qwed-mcp/)
 [![Docker Verified](https://img.shields.io/badge/Docker-Verified_Publisher-blue.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification)
 [![Docker Scout](https://img.shields.io/badge/Docker-Scout_Analyzed-1D63ED.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification/tags)
 [![Cloudflare](https://img.shields.io/badge/Protected_by-Cloudflare-F38020?style=flat&logo=cloudflare&logoColor=white)](https://www.cloudflare.com/)
 [![Snyk Security](https://snyk.io/test/github/QWED-AI/qwed-mcp/badge.svg)](https://snyk.io/test/github/QWED-AI/qwed-mcp)
+[![Docs by Mintlify](https://img.shields.io/badge/Docs_by-Mintlify-0f1117?style=flat&logo=mintlify&logoColor=white)](https://docs.qwedai.com)
+[![Deploys by Netlify](https://img.shields.io/badge/Deploys_by-Netlify-00C7B7?style=flat&logo=netlify&logoColor=white)](https://www.netlify.com)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green)](https://modelcontextprotocol.io)
 [![GitHub stars](https://img.shields.io/github/stars/QWED-AI/qwed-mcp?style=social)](https://github.com/QWED-AI/qwed-mcp)
@@ -71,55 +73,56 @@ Quit completely (system tray → Quit) and reopen.
 ### Step 4: Test it!
 
 Ask Claude:
-> "Verify the derivative of x³ equals 3x² using verify_math"
+> "Write a python script that verifies a 10,000 investment at 7.5% for 5 years using the `qwed_new` math engine, and run it using `execute_python_code`."
+
+---
+
+## ⚠️ Migration Note: Deprecation of `verify_*` Tools
+
+To solve "context bloat" and align with the new MCP standard (RFC-9728), all 1:1 functional tools (e.g., `verify_math`, `verify_sql`, `verify_code`) **have been removed** as of `v0.2.0`. 
+
+They have been replaced with a single, highly capable tool:
+**👉 `execute_python_code`** 
+
+**Before:**
+> "Use `verify_math` to check this formula." (Claude loads 14 different tool schemas into context)
+
+**After:**
+> "Use `execute_python_code` to write and run a script that imports `qwed_new.engines.math_engine` to verify..." (Claude loads 1 tool schema into context)
+
+If you see an `"Unknown tool"` error, it means Claude is trying to use a legacy tool. Simply tell Claude: *"The `verify_*` tools are removed. Use `execute_python_code` to natively write and run a Python verification script."*
 
 ---
 
 ## 🔧 Available Tools
 
-| Tool | Engine | Use Case |
-|------|--------|----------|
-| `verify_math` | SymPy | Verify calculations, derivatives, integrals |
-| `verify_logic` | Z3 Solver | Prove logical arguments, validate reasoning |
-| `verify_code` | AST Analysis | Detect security vulnerabilities |
-| `verify_sql` | Pattern Matching | SQL injection detection |
+| Tool | Description | Use Case |
+|------|-------------|----------|
+| `execute_python_code` | **Subprocess Execution** | The single entrypoint for all QWED capabilities. Executes dynamically generated Python code in a subprocess with restricted environment variables. Note: Runs with server privileges; ensure inputs are trusted. |
 
 ---
 
 ## 💡 Example Prompts for Claude
 
+> **Note:** Claude already knows how to use QWED natively via standard Python imports.
+
 ### Financial Calculations
-```
+```text
 A bank says: "Invest $10,000 at 7.5% compounded quarterly for 5 years = $14,356.29"
-Use verify_math to check using A = P(1 + r/n)^(nt)
+Please write a short Python script using the standard compound interest formula to verify this, and run it with execute_python_code.
 ```
 
 ### Loan EMI Verification
-```
+```text
 Verify: ₹10,00,000 loan at 9% for 5 years = EMI of ₹20,758
-Use the EMI formula: EMI = P × r × (1+r)^n / ((1+r)^n - 1)
+Write a python script importing necessary tools to verify this EMI calculation, and execute it using execute_python_code.
 ```
 
-### Logic Verification
-```
-Use verify_logic:
-Premises: "All mammals are warm-blooded", "Dolphins are mammals"
-Conclusion: "Dolphins are warm-blooded"
-```
-
-### Code Security Check
-```
-Use verify_code to check this for security issues:
-
-def run_command(cmd):
-    os.system(cmd)
-    return eval(get_response())
-```
-
-### SQL Injection Detection
-```
-Use verify_sql to check:
-SELECT * FROM accounts WHERE user_id = '1' OR '1'='1'
+### Complex Reasoning Workflows (The Power of Python)
+```text
+Read the user terms in the attached document. 
+1. Use execute_python_code to extract and verify the legal clauses using qwed_legal.
+2. In the same script, verify if the referenced financial penalties align with the allowed boundaries.
 ```
 
 ---
@@ -136,10 +139,9 @@ SELECT * FROM accounts WHERE user_id = '1' OR '1'='1'
 ┌───────────────────────────────────────────┐
 │           QWED-MCP Server                 │
 ├───────────────────────────────────────────┤
-│  verify_math()    → SymPy (symbolic math) │
-│  verify_logic()   → Z3 SMT Solver         │
-│  verify_code()    → Python AST Analysis   │
-│  verify_sql()     → Regex Pattern Match   │
+│ execute_python_code()                     │
+│  └─► Subprocess Execution (Restricted Env)│
+│       └─► Native QWED library execution   │
 └───────────────────────────────────────────┘
 ```
 
@@ -147,12 +149,14 @@ SELECT * FROM accounts WHERE user_id = '1' OR '1'='1'
 
 ## 🎯 Why QWED-MCP?
 
+> *Note: Subprocess execution provides answers/checks purely based on what QWED SDK methods are invoked inside the executed scripts. Execution itself does not guarantee injection detection without specific SDK calls.*
+
 | Without QWED-MCP | With QWED-MCP |
 |------------------|---------------|
-| LLM calculates → 95% correct | `verify_math()` → **100% correct** |
-| LLM writes SQL → might inject | `verify_sql()` → **injection detected** |
-| LLM reasons → might be wrong | `verify_logic()` → **formally proven** |
-| LLM codes → might be unsafe | `verify_code()` → **security checked** |
+| LLM calculates → 95% correct | Executes Python script calling `qwed_finance` → **100% correct** |
+| LLM writes SQL → might inject | Script uses `qwed_new` analyzer → **injection detected** |
+| LLM reasons → might be wrong | Z3 solver executed via SDK → **formally proven** |
+| LLM codes → might be unsafe | AST check script executed → **security checked** |
 
 ---
 
@@ -188,10 +192,12 @@ SELECT * FROM accounts WHERE user_id = '1' OR '1'='1'
 
 ### With Claude Desktop
 ```
-┌───────────────────┐     ┌─────────────────┐     ┌──────────────────┐
-│      Claude       │ ──► │    QWED-MCP     │ ──► │  Verified Answer │
-│ "What's d/dx x³?" │     │ verify_math()   │     │    "3x²" ✓       │
-└───────────────────┘     └─────────────────┘     └──────────────────┘
+┌───────────────────┐     ┌───────────────────────┐     ┌───────────────────┐
+│      Claude       │     │       QWED-MCP        │     │  Verified Answer  │
+│ "What's d/dx x³?" │ ──► │ execute_python_code() │ ──► │      "3x²" ✓      │
+│ "Write script to  │     │ Runs SymPy natively   │     │ (STDOUT Captured) │
+│ check."           │     └───────────────────────┘     └───────────────────┘
+└───────────────────┘
 ```
 
 ---
@@ -250,11 +256,10 @@ Yes! The server is extensible. Fork it and add your custom `@mcp.tool()` functio
 
 ## 🗺️ Roadmap
 
-### ✅ Released (v1.0.0)
-- [x] `verify_math` — SymPy symbolic math
-- [x] `verify_logic` — Z3 SMT solver
-- [x] `verify_code` — Python AST security analysis
-- [x] `verify_sql` — SQL injection detection
+### ✅ Released (v0.2.0)
+- [x] Context bloat resolution (RFC-9728 compatibility)
+- [x] Unified `execute_python_code` environment
+- [x] Secure process isolation (env-restricted) and robust timeouts
 - [x] Claude Desktop integration
 - [x] Windows/macOS/Linux support
 

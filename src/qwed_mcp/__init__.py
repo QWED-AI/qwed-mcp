@@ -6,20 +6,12 @@ Works with Claude Desktop, VS Code, and any MCP-compatible client.
 """
 
 from .server import mcp, main
-from .tools import (
-    verify_math,
-    verify_logic,
-    verify_code,
-    verify_sql,
-)
+from .tools import register_tools
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "mcp",
     "main",
-    "verify_math",
-    "verify_logic",
-    "verify_code",
-    "verify_sql",
+    "register_tools",
 ]
