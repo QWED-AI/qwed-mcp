@@ -57,6 +57,17 @@ async def _kill_process(proc: asyncio.subprocess.Process) -> None:
     except asyncio.TimeoutError:
         pass
 
+def _close_streams(proc: asyncio.subprocess.Process) -> None:
+    """Explicitly close process streams to prevent FD leaks."""
+    for stream_name in ('stdout', 'stderr', 'stdin'):
+        stream = getattr(proc, stream_name, None)
+        if stream:
+            transport = getattr(stream, '_transport', None)
+            if transport is not None:
+                transport.close()
+            elif hasattr(stream, 'close'):
+                stream.close()
+
 async def _read_stream(stream: asyncio.StreamReader | None, cap_bytes: int = 1024 * 1024) -> bytes:
     """Read from an async stream up to a maximum byte cap to prevent OOM."""
     if stream is None:
@@ -157,14 +168,7 @@ async def execute_python_code_tool(arguments: dict[str, Any]) -> list[TextConten
             await _cleanup_script(script_path_obj)
             return [TextContent(type="text", text="Execution timed out after 30 seconds.")]
         finally:
-            for stream_name in ('stdout', 'stderr', 'stdin'):
-                stream = getattr(proc, stream_name, None)
-                if stream:
-                    transport = getattr(stream, '_transport', None)
-                    if transport is not None:
-                        transport.close()
-                    elif hasattr(stream, 'close'):
-                        stream.close()
+            _close_streams(proc)
         
         await _cleanup_script(script_path_obj)
         final_output = _format_output(stdout, stderr, returncode)
