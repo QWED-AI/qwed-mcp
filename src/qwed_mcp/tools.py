@@ -35,16 +35,18 @@ async def _kill_process(proc: asyncio.subprocess.Process) -> None:
         try:
             pgid = os.getpgid(proc.pid)
             if _is_valid_pgid(pgid):
-                os.killpg(pgid, signal.SIGKILL)
+                os.killpg(pgid, signal.SIGKILL)  # nosonar
             else:
                 proc.kill()
+        except ProcessLookupError:
+            logger.debug("Process already terminated")
         except Exception as e:
             logger.debug(f"Failed to kill process group: {e}, falling back to proc.kill()")
             proc.kill()
     else:
         try:
             proc.kill()
-        except ProcessLookupError:
+        except (ProcessLookupError, OSError):
             pass
     
     try:
@@ -133,11 +135,14 @@ async def execute_python_code_tool(arguments: dict[str, Any]) -> list[TextConten
         async def _run_and_read() -> tuple[bytes, bytes]:
             out_task = asyncio.create_task(_read_stream(proc.stdout))
             err_task = asyncio.create_task(_read_stream(proc.stderr))
-            await proc.wait()
             
-            # Wait for streams to finish reading
-            await asyncio.wait([out_task, err_task])
-            return out_task.result(), err_task.result()
+            # Run process wait and stream readers concurrently to avoid deadlock
+            stdout_bytes, stderr_bytes, _ = await asyncio.gather(
+                out_task,
+                err_task,
+                proc.wait()
+            )
+            return stdout_bytes, stderr_bytes
 
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(_run_and_read(), timeout=30.0)
