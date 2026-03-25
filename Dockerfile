@@ -18,15 +18,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
-# Install wheel patches
-RUN uv pip install --python 3.14 "uv>=0.5.1" "wheel>=0.46.2" "setuptools>=78.1.1"
-
-COPY pyproject.toml .
-COPY README.md .
-
 RUN uv venv --python 3.14 /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+
+# Install wheel patches into the venv
+RUN uv pip install "uv>=0.5.1" "wheel>=0.46.2" "setuptools>=78.1.1"
+
+COPY pyproject.toml .
+COPY README.md .
 
 COPY src/ src/
 RUN uv pip install .
