@@ -193,10 +193,13 @@ class AsyncMCPHandler:
     def _prune_pending_verifications(self, ttl_seconds: float = 3600.0) -> None:
         """Removes pending verifications older than TTL to prevent memory leaks."""
         current_time = time.time()
-        expired_keys = [
-            k for k, v in self.pending_verifications.items()
-            if current_time - v.get("created_at", current_time) > ttl_seconds
-        ]
+        expired_keys = []
+        for k, v in self.pending_verifications.items():
+            if current_time - v.get("created_at", current_time) > ttl_seconds:
+                if v.get("status") in ["running", "queued"] and v.get("task"):
+                    v["task"].cancel()
+                expired_keys.append(k)
+        
         for k in expired_keys:
             del self.pending_verifications[k]
 
@@ -204,28 +207,37 @@ class AsyncMCPHandler:
         try:
             if job_id in self.pending_verifications:
                 self.pending_verifications[job_id]["status"] = "running"
+                self.pending_verifications[job_id]["created_at"] = time.time()
             result_list = await execute_python_code_tool(arguments)
             if job_id in self.pending_verifications:
                 self.pending_verifications[job_id]["status"] = "completed"
+                self.pending_verifications[job_id]["created_at"] = time.time()
                 if result_list and len(result_list) > 0:
                     self.pending_verifications[job_id]["result"] = result_list[0].text
                 else:
                     self.pending_verifications[job_id]["result"] = "No output"
+        except asyncio.CancelledError:
+            if job_id in self.pending_verifications:
+                self.pending_verifications[job_id]["status"] = "cancelled"
+                self.pending_verifications[job_id]["created_at"] = time.time()
+            raise
         except Exception as e:
             if job_id in self.pending_verifications:
                 self.pending_verifications[job_id]["status"] = "failed"
+                self.pending_verifications[job_id]["created_at"] = time.time()
                 self.pending_verifications[job_id]["result"] = str(e)
 
     def dispatch_background_worker(self, arguments: dict[str, Any]) -> str:
         self._prune_pending_verifications()
         job_id = str(uuid.uuid4())
-        task = asyncio.create_task(self._worker(job_id, arguments))
         self.pending_verifications[job_id] = {
-            "status": "queued", 
+            "status": "queued",
             "result": None,
             "created_at": time.time(),
-            "task": task
+            "task": None
         }
+        task = asyncio.create_task(self._worker(job_id, arguments))
+        self.pending_verifications[job_id]["task"] = task
         return job_id
 
     def get_status(self, job_id: str) -> str:
@@ -239,12 +251,11 @@ class AsyncMCPHandler:
         else:
             return f"Status: {job['status']}..."
 
-async_handler = AsyncMCPHandler()
-
-
 def register_tools(server: Server) -> None:
     """Register the execution and background status tools with the MCP server."""
     
+    async_handler = AsyncMCPHandler()
+
     @server.list_tools()
     async def list_tools() -> list[Tool]:
         """List all available QWED verification tools."""

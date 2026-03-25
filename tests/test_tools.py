@@ -2,7 +2,9 @@ import os
 import pytest
 import asyncio
 from unittest.mock import patch, AsyncMock, MagicMock
-from qwed_mcp.tools import execute_python_code_tool, async_handler
+from qwed_mcp.tools import execute_python_code_tool, AsyncMCPHandler
+
+async_handler = AsyncMCPHandler()
 
 # Ensure tests bypass the trusted mode execution guard
 os.environ["QWED_MCP_TRUSTED_CODE_EXECUTION"] = "true"
