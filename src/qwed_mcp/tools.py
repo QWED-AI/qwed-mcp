@@ -69,7 +69,7 @@ def _close_streams(proc: asyncio.subprocess.Process) -> None:
             elif hasattr(stream, 'close'):
                 stream.close()
 
-async def _handle_cap_exceeded(proc: asyncio.subprocess.Process | None) -> None:
+def _handle_cap_exceeded(proc: asyncio.subprocess.Process | None) -> None:
     """Kill process when output cap is exceeded."""
     if proc:
         try:
@@ -93,7 +93,7 @@ async def _read_stream(stream: asyncio.StreamReader | None, proc: asyncio.subpro
             if remaining > 0:
                 chunks.append(chunk[:remaining])
             chunks.append(b"\n\n[WARNING: OUTPUT TRUNCATED DUE TO 1MB SIZE CAP. PROCESS TERMINATED.]")
-            await _handle_cap_exceeded(proc)
+            _handle_cap_exceeded(proc)
             break
             
         chunks.append(chunk)

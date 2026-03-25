@@ -1,6 +1,6 @@
 
 # Use an official Python runtime as a parent image
-FROM python:3.14-slim-bookworm AS builder
+FROM python:3.14-slim-bullseye AS builder
 
 # Set work directory
 WORKDIR /app
@@ -27,7 +27,7 @@ COPY src/ src/
 RUN uv pip install .
 
 # Runtime stage
-FROM python:3.14-slim-bookworm
+FROM python:3.14-slim-bullseye
 
 WORKDIR /app
 
