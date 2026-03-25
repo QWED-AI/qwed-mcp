@@ -35,21 +35,7 @@ async def test_execute_python_code_empty():
     assert len(result) == 1
     assert "Error: No code provided." in result[0].text
 
-@pytest.mark.asyncio
-@patch("qwed_mcp.tools.asyncio.wait_for", side_effect=asyncio.TimeoutError)
-@patch("qwed_mcp.tools.asyncio.create_subprocess_exec")
-async def test_execute_python_code_timeout(mock_create, mock_wait):
-    mock_proc = MagicMock()
-    mock_proc.pid = 12345
-    mock_proc.returncode = None
-    mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-    mock_create.return_value = mock_proc
-    
-    success, result = await execute_python_code_tool({"code": "while True: pass"})
-    
-    assert success is False
-    assert len(result) == 1
-    assert "Execution timed out after 30.0 seconds." in result[0].text
+
 
 async def _wait_for_job(job_id: str, poll_interval: float = 0.1) -> str:
     """Poll until job completes."""

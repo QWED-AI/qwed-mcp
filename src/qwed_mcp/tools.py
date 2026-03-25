@@ -109,7 +109,7 @@ def _format_output(stdout: str, stderr: str, returncode: int | None) -> str:
     return "\n\n".join(output_parts).strip()
 
 
-async def execute_python_code_tool(arguments: dict[str, Any], timeout: float | None = 30.0) -> tuple[bool, list[TextContent]]:
+async def execute_python_code_tool(arguments: dict[str, Any]) -> tuple[bool, list[TextContent]]:
     """Execute the provided python code in a subprocess. Returns (success, TextContent)."""
     
     trusted_mode = os.getenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "false").lower() == "true"
@@ -160,18 +160,15 @@ async def execute_python_code_tool(arguments: dict[str, Any], timeout: float | N
             return stdout_bytes, stderr_bytes
 
         try:
-            if timeout is not None:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(_run_and_read(), timeout=timeout)
-            else:
-                # Run without timeout bounds for heavy background verifications
-                stdout_bytes, stderr_bytes = await _run_and_read()
+            # Run without timeout bounds; callers should manage timeouts
+            stdout_bytes, stderr_bytes = await _run_and_read()
             stdout = stdout_bytes.decode('utf-8', errors='replace') if stdout_bytes else ""
             stderr = stderr_bytes.decode('utf-8', errors='replace') if stderr_bytes else ""
             returncode = proc.returncode
-        except asyncio.TimeoutError:
+        except asyncio.CancelledError:
             await _kill_process(proc)
             await _cleanup_script(script_path_obj)
-            return False, [TextContent(type="text", text=f"Execution timed out after {timeout} seconds.")]
+            raise
         finally:
             _close_streams(proc)
         
@@ -217,7 +214,7 @@ class AsyncMCPHandler:
                     self.pending_verifications[job_id]["last_updated_at"] = time.time()
                     
                 # Execute without timeout for background background verification
-                success, result_list = await execute_python_code_tool(arguments, timeout=None)
+                success, result_list = await execute_python_code_tool(arguments)
                 
                 if job_id in self.pending_verifications:
                     self.pending_verifications[job_id]["status"] = "success" if success else "failed"
@@ -260,7 +257,8 @@ class AsyncMCPHandler:
         job = self.pending_verifications[job_id]
         
         # Sentry High Resolution: Refresh the timestamp when polled by clients
-        job["last_updated_at"] = time.time()
+        if job["status"] in ["queued", "running"]:
+            job["last_updated_at"] = time.time()
         
         if job["status"] in ["success", "failed", "completed", "cancelled"]:
             return f"Status: {job['status']}\n\nResult:\n{job['result']}"
@@ -321,8 +319,11 @@ def register_tools(server: Server) -> None:
                 msg = f"Verification order is being placed for the request {job_id}. Check back using the 'verification_status' tool."
                 return [TextContent(type="text", text=msg)]
                 
-            success, result_content = await execute_python_code_tool(arguments)
-            return result_content
+            try:
+                _, result_content = await asyncio.wait_for(execute_python_code_tool(arguments), timeout=30.0)
+                return result_content
+            except asyncio.TimeoutError:
+                return [TextContent(type="text", text="Execution timed out after 30.0 seconds.")]
             
         elif name == "verification_status":
             job_id = arguments.get("job_id", "")
