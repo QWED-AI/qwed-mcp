@@ -11,24 +11,27 @@ os.environ["QWED_MCP_TRUSTED_CODE_EXECUTION"] = "true"
 
 @pytest.mark.asyncio
 async def test_execute_python_code_success():
-    result = await execute_python_code_tool({"code": "print('Hello from sandboxed environment')"})
+    success, result = await execute_python_code_tool({"code": "print('Hello from sandboxed environment')"})
     
+    assert success is True
     assert len(result) == 1
     assert "Hello from sandboxed environment" in result[0].text
     assert "Execution completed successfully." in result[0].text
 
 @pytest.mark.asyncio
 async def test_execute_python_code_error():
-    result = await execute_python_code_tool({"code": "1 / 0"})
+    success, result = await execute_python_code_tool({"code": "1 / 0"})
     
+    assert success is False
     assert len(result) == 1
     assert "ZeroDivisionError" in result[0].text
     assert "Execution failed with return code" in result[0].text
 
 @pytest.mark.asyncio
 async def test_execute_python_code_empty():
-    result = await execute_python_code_tool({})
+    success, result = await execute_python_code_tool({})
     
+    assert success is False
     assert len(result) == 1
     assert "Error: No code provided." in result[0].text
 
@@ -42,16 +45,17 @@ async def test_execute_python_code_timeout(mock_create, mock_wait):
     mock_proc.communicate = AsyncMock(return_value=(b"", b""))
     mock_create.return_value = mock_proc
     
-    result = await execute_python_code_tool({"code": "while True: pass"})
+    success, result = await execute_python_code_tool({"code": "while True: pass"})
     
+    assert success is False
     assert len(result) == 1
-    assert "Execution timed out after 30 seconds." in result[0].text
+    assert "Execution timed out after 30.0 seconds." in result[0].text
 
 async def _wait_for_job(job_id: str, poll_interval: float = 0.1) -> str:
     """Poll until job completes."""
     while True:
         status = async_handler.get_status(job_id)
-        if "Status: completed" in status or "Status: failed" in status:
+        if "Status: success" in status or "Status: failed" in status:
             return status
         await asyncio.sleep(poll_interval)
 
@@ -59,14 +63,14 @@ async def _wait_for_job(job_id: str, poll_interval: float = 0.1) -> str:
 async def test_async_handler_success():
     job_id = async_handler.dispatch_background_worker({"code": "print('async success')"})
     status = await asyncio.wait_for(_wait_for_job(job_id), timeout=5.0)
-    assert "Status: completed" in status
+    assert "Status: success" in status
     assert "async success" in status
 
 @pytest.mark.asyncio
 async def test_async_handler_error():
     job_id = async_handler.dispatch_background_worker({"code": "1/0"})
     status = await asyncio.wait_for(_wait_for_job(job_id), timeout=5.0)
-    assert "Status: completed" in status
+    assert "Status: failed" in status  # Because exception makes it 'failed' or 0 exit code makes it false
     assert "ZeroDivisionError" in status
 
 def test_async_handler_invalid_job():
