@@ -260,9 +260,17 @@ class AsyncMCPHandler:
         return job_id
 
     def get_status(self, job_id: str) -> str:
+        if job_id in self.pending_verifications:
+            job = self.pending_verifications[job_id]
+            if job["status"] in ["success", "failed", "cancelled"]:
+                result_str = f"Status: {job['status']}\n\nResult:\n{job['result']}"
+                self._prune_pending_verifications()
+                return result_str
+                
         self._prune_pending_verifications()
+        
         if job_id not in self.pending_verifications:
-            return f"Error: Job ID '{job_id}' not found."
+            return f"Error: Job ID '{job_id}' not found or expired."
         
         job = self.pending_verifications[job_id]
         

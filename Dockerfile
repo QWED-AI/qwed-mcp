@@ -1,14 +1,12 @@
 
 # Use an official Python runtime as a parent image
-FROM python:3.14-slim-bullseye AS builder
+FROM python:3.14-alpine AS builder
 
 # Set work directory
 WORKDIR /app
 
 # Install build dependencies
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache build-base
 
 # Install uv for fast package management and upgrade wheel to patch CVE-2026-24049
 RUN pip install "uv>=0.5.1" "wheel>=0.46.2" "setuptools>=78.1.1"
@@ -27,14 +25,13 @@ COPY src/ src/
 RUN uv pip install .
 
 # Runtime stage
-FROM python:3.14-slim-bullseye
+FROM python:3.14-alpine
 
 WORKDIR /app
 
 # Patch system-level vulnerabilities and log upgraded packages for AI-BOM audit trail
-RUN apt-get update && apt-get upgrade -y && \
-    dpkg-query -W -f='${Package} ${Version}\n' > /var/log/apt-upgraded-packages.txt && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk update && apk upgrade && \
+    apk info -v > /var/log/apk-upgraded-packages.txt
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
@@ -46,7 +43,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
 # Create a non-root user
-RUN useradd -m -u 1000 qweduser
+RUN adduser -D -u 1000 qweduser
 USER qweduser
 
 # Expose stdio (not a network port, as MCP uses stdio)

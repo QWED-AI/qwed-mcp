@@ -67,7 +67,7 @@ async def test_async_handler_error(handler_fixture):
 @pytest.mark.asyncio
 async def test_async_handler_invalid_job(handler_fixture):
     status = handler_fixture.get_status("fake-uuid")
-    assert "Error: Job ID 'fake-uuid' not found." in status
+    assert "Error: Job ID 'fake-uuid' not found or expired." in status
 
 @pytest.mark.asyncio
 async def test_mcp_round_trip():
