@@ -45,27 +45,25 @@ async def test_execute_python_code_timeout(mock_create, mock_wait):
     assert len(result) == 1
     assert "Execution timed out after 30 seconds." in result[0].text
 
-async def _wait_for_job(job_id: str, timeout: float = 5.0, poll_interval: float = 0.1) -> str:
-    """Poll until job completes or timeout."""
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
+async def _wait_for_job(job_id: str, poll_interval: float = 0.1) -> str:
+    """Poll until job completes."""
+    while True:
         status = async_handler.get_status(job_id)
         if "Status: completed" in status or "Status: failed" in status:
             return status
         await asyncio.sleep(poll_interval)
-    raise TimeoutError(f"Job {job_id} did not complete within {timeout}s")
 
 @pytest.mark.asyncio
 async def test_async_handler_success():
     job_id = async_handler.dispatch_background_worker({"code": "print('async success')"})
-    status = await _wait_for_job(job_id)
+    status = await asyncio.wait_for(_wait_for_job(job_id), timeout=5.0)
     assert "Status: completed" in status
     assert "async success" in status
 
 @pytest.mark.asyncio
 async def test_async_handler_error():
     job_id = async_handler.dispatch_background_worker({"code": "1/0"})
-    status = await _wait_for_job(job_id)
+    status = await asyncio.wait_for(_wait_for_job(job_id), timeout=5.0)
     assert "Status: completed" in status
     assert "ZeroDivisionError" in status
 

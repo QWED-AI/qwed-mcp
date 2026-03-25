@@ -202,16 +202,19 @@ class AsyncMCPHandler:
 
     async def _worker(self, job_id: str, arguments: dict[str, Any]):
         try:
-            self.pending_verifications[job_id]["status"] = "running"
+            if job_id in self.pending_verifications:
+                self.pending_verifications[job_id]["status"] = "running"
             result_list = await execute_python_code_tool(arguments)
-            self.pending_verifications[job_id]["status"] = "completed"
-            if result_list and len(result_list) > 0:
-                self.pending_verifications[job_id]["result"] = result_list[0].text
-            else:
-                self.pending_verifications[job_id]["result"] = "No output"
+            if job_id in self.pending_verifications:
+                self.pending_verifications[job_id]["status"] = "completed"
+                if result_list and len(result_list) > 0:
+                    self.pending_verifications[job_id]["result"] = result_list[0].text
+                else:
+                    self.pending_verifications[job_id]["result"] = "No output"
         except Exception as e:
-            self.pending_verifications[job_id]["status"] = "failed"
-            self.pending_verifications[job_id]["result"] = str(e)
+            if job_id in self.pending_verifications:
+                self.pending_verifications[job_id]["status"] = "failed"
+                self.pending_verifications[job_id]["result"] = str(e)
 
     def dispatch_background_worker(self, arguments: dict[str, Any]) -> str:
         self._prune_pending_verifications()
