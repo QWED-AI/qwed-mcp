@@ -181,9 +181,48 @@ async def execute_python_code_tool(arguments: dict[str, Any]) -> list[TextConten
             await _cleanup_script(script_path_obj)
         return [TextContent(type="text", text=f"Execution error: {str(e)}")]
 
+class AsyncMCPHandler:
+    """
+    Implements async job queues to avoid blocking on long-running MCP tool calls.
+    Allows LLM clients to dispatch heavy tasks and poll them using the 'verification_status' tool.
+    """
+    def __init__(self):
+        self.pending_verifications: dict[str, dict[str, Any]] = {}
+
+    async def _worker(self, job_id: str, arguments: dict[str, Any]):
+        try:
+            self.pending_verifications[job_id]["status"] = "running"
+            result_list = await execute_python_code_tool(arguments)
+            self.pending_verifications[job_id]["status"] = "completed"
+            if result_list and len(result_list) > 0:
+                self.pending_verifications[job_id]["result"] = result_list[0].text
+            else:
+                self.pending_verifications[job_id]["result"] = "No output"
+        except Exception as e:
+            self.pending_verifications[job_id]["status"] = "failed"
+            self.pending_verifications[job_id]["result"] = str(e)
+
+    def dispatch_background_worker(self, arguments: dict[str, Any]) -> str:
+        job_id = str(uuid.uuid4())
+        self.pending_verifications[job_id] = {"status": "queued", "result": None}
+        asyncio.create_task(self._worker(job_id, arguments))
+        return job_id
+
+    def get_status(self, job_id: str) -> str:
+        if job_id not in self.pending_verifications:
+            return f"Error: Job ID '{job_id}' not found."
+        
+        job = self.pending_verifications[job_id]
+        if job["status"] in ["completed", "failed"]:
+            return f"Status: {job['status']}\n\nResult:\n{job['result']}"
+        else:
+            return f"Status: {job['status']}..."
+
+async_handler = AsyncMCPHandler()
+
 
 def register_tools(server: Server) -> None:
-    """Register the single execution tool with the MCP server."""
+    """Register the execution and background status tools with the MCP server."""
     
     @server.list_tools()
     async def list_tools() -> list[Tool]:
@@ -198,9 +237,27 @@ def register_tools(server: Server) -> None:
                         "code": {
                             "type": "string", 
                             "description": "The Python code to execute."
+                        },
+                        "background": {
+                            "type": "boolean",
+                            "description": "Execute asynchronously in the background and return a tracking job_id. Set to True for heavy logic verifications."
                         }
                     },
                     "required": ["code"]
+                }
+            ),
+            Tool(
+                name="verification_status",
+                description="Check the execution status and output of a background verification task.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "job_id": {
+                            "type": "string",
+                            "description": "The UUID returned by execute_python_code when background=True."
+                        }
+                    },
+                    "required": ["job_id"]
                 }
             )
         ]
@@ -210,7 +267,19 @@ def register_tools(server: Server) -> None:
         """Execute the QWED verification tool."""
         logger.info(f"Calling tool: {name}")
         
-        if name != "execute_python_code":
-            return [TextContent(type="text", text=f"Unknown tool: {name}")]
+        if name == "execute_python_code":
+            if arguments.get("background"):
+                job_id = async_handler.dispatch_background_worker(arguments)
+                msg = f"Verification order is being placed for the request {job_id}. Check back using the 'verification_status' tool."
+                return [TextContent(type="text", text=msg)]
+            return await execute_python_code_tool(arguments)
             
-        return await execute_python_code_tool(arguments)
+        elif name == "verification_status":
+            job_id = arguments.get("job_id", "")
+            if not job_id:
+                 return [TextContent(type="text", text="Error: Missing job_id in arguments.")]
+            status_text = async_handler.get_status(job_id)
+            return [TextContent(type="text", text=status_text)]
+            
+        else:
+            return [TextContent(type="text", text=f"Unknown tool: {name}")]
