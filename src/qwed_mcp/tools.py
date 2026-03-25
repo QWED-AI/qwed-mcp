@@ -69,6 +69,14 @@ def _close_streams(proc: asyncio.subprocess.Process) -> None:
             elif hasattr(stream, 'close'):
                 stream.close()
 
+async def _handle_cap_exceeded(proc: asyncio.subprocess.Process | None) -> None:
+    """Kill process when output cap is exceeded."""
+    if proc:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
 async def _read_stream(stream: asyncio.StreamReader | None, proc: asyncio.subprocess.Process | None = None, cap_bytes: int = 1024 * 1024) -> bytes:
     """Read from an async stream up to a maximum byte cap to prevent OOM. Kills process if cap is reached."""
     if stream is None:
@@ -85,11 +93,7 @@ async def _read_stream(stream: asyncio.StreamReader | None, proc: asyncio.subpro
             if remaining > 0:
                 chunks.append(chunk[:remaining])
             chunks.append(b"\n\n[WARNING: OUTPUT TRUNCATED DUE TO 1MB SIZE CAP. PROCESS TERMINATED.]")
-            if proc:
-                try:
-                    proc.kill()
-                except OSError:
-                    pass
+            await _handle_cap_exceeded(proc)
             break
             
         chunks.append(chunk)
@@ -218,7 +222,7 @@ class AsyncMCPHandler:
                     self.pending_verifications[job_id]["status"] = "running"
                     self.pending_verifications[job_id]["last_updated_at"] = time.time()
                     
-                # Execute without timeout for background background verification
+                # Execute without timeout for background verification
                 success, result_list = await execute_python_code_tool(arguments)
                 
                 if job_id in self.pending_verifications:
@@ -262,7 +266,7 @@ class AsyncMCPHandler:
         
         job = self.pending_verifications[job_id]
         
-        if job["status"] in ["success", "failed", "completed", "cancelled"]:
+        if job["status"] in ["success", "failed", "cancelled"]:
             return f"Status: {job['status']}\n\nResult:\n{job['result']}"
         else:
             return f"Status: {job['status']}..."
