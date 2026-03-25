@@ -1,56 +1,60 @@
 
-# Use an official Python runtime as a parent image
-FROM python:3.11.11-slim-bookworm AS builder
+# Use Ubuntu 24.04 to bypass Debian 12 Zlib vulnerabilities while keeping glibc for fast z3-solver wheel installations
+FROM ubuntu:24.04 AS builder
 
-# Set work directory
 WORKDIR /app
 
-# Install build dependencies
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# Install Python 3.14 from Deadsnakes PPA to satisfy the 3.14 requirement on a safe OS
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common curl build-essential && \
+    add-apt-repository ppa:deadsnakes/ppa -y && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    python3.14 python3.14-venv && \
+    rm -rf /var/lib/apt/lists/*
 
-# Install uv for fast package management and upgrade wheel to patch CVE-2026-24049
-RUN pip install "uv>=0.5.1" "wheel>=0.46.2"
+# Install uv for fast package management
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
 
-# Copy project files (dependencies only to optimize layer caching)
-COPY pyproject.toml .
-COPY README.md .
-
-# Create virtual environment
-RUN uv venv /opt/venv
+RUN uv venv --python 3.14 /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Now copy source code and install the package
+# Install wheel patches into the venv
+RUN uv pip install "uv>=0.5.1" "wheel>=0.46.2" "setuptools>=78.1.1"
+
+COPY pyproject.toml .
+COPY README.md .
+
 COPY src/ src/
 RUN uv pip install .
 
 # Runtime stage
-FROM python:3.11.11-slim-bookworm
+FROM ubuntu:24.04
 
 WORKDIR /app
 
-# Patch system-level vulnerabilities and log upgraded packages for AI-BOM audit trail
-RUN apt-get update && apt-get upgrade -y && \
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python 3.14 runtime on pristine Ubuntu 24.04 and log packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common && \
+    add-apt-repository ppa:deadsnakes/ppa -y && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    python3.14 && \
     dpkg-query -W -f='${Package} ${Version}\n' > /var/log/apt-upgraded-packages.txt && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
 
-# Set environment variables
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
-# Prevent python from writing pyc files to disc
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Create a non-root user
-RUN useradd -m -u 1000 qweduser
+RUN useradd -m qweduser
 USER qweduser
 
-# Expose stdio (not a network port, as MCP uses stdio)
-# But strictly speaking we don't EXPOSE for stdio.
-
-# Entrypoint
 ENTRYPOINT ["qwed-mcp"]

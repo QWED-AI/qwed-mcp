@@ -11,6 +11,7 @@ import sys
 import anyio
 import asyncio
 import uuid
+import time
 import tempfile
 from subprocess import PIPE, DEVNULL
 from typing import Any
@@ -68,8 +69,16 @@ def _close_streams(proc: asyncio.subprocess.Process) -> None:
             elif hasattr(stream, 'close'):
                 stream.close()
 
-async def _read_stream(stream: asyncio.StreamReader | None, cap_bytes: int = 1024 * 1024) -> bytes:
-    """Read from an async stream up to a maximum byte cap to prevent OOM."""
+def _handle_cap_exceeded(proc: asyncio.subprocess.Process | None) -> None:
+    """Kill process when output cap is exceeded."""
+    if proc:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+async def _read_stream(stream: asyncio.StreamReader | None, proc: asyncio.subprocess.Process | None = None, cap_bytes: int = 1024 * 1024) -> bytes:
+    """Read from an async stream up to a maximum byte cap to prevent OOM. Kills process if cap is reached."""
     if stream is None:
         return b""
     chunks: list[bytes] = []
@@ -83,7 +92,8 @@ async def _read_stream(stream: asyncio.StreamReader | None, cap_bytes: int = 102
             remaining = cap_bytes - bytes_read
             if remaining > 0:
                 chunks.append(chunk[:remaining])
-            chunks.append(b"\n\n[WARNING: OUTPUT TRUNCATED DUE TO 1MB SIZE CAP]")
+            chunks.append(b"\n\n[WARNING: OUTPUT TRUNCATED DUE TO 1MB SIZE CAP. PROCESS TERMINATED.]")
+            _handle_cap_exceeded(proc)
             break
             
         chunks.append(chunk)
@@ -108,16 +118,16 @@ def _format_output(stdout: str, stderr: str, returncode: int | None) -> str:
     return "\n\n".join(output_parts).strip()
 
 
-async def execute_python_code_tool(arguments: dict[str, Any]) -> list[TextContent]:
-    """Execute the provided python code in a subprocess."""
+async def execute_python_code_tool(arguments: dict[str, Any]) -> tuple[bool, list[TextContent]]:
+    """Execute the provided python code in a subprocess. Returns (success, TextContent)."""
     
     trusted_mode = os.getenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "false").lower() == "true"
     if not trusted_mode:
-        return [TextContent(type="text", text="Error: Code execution is disabled. The server admin must set QWED_MCP_TRUSTED_CODE_EXECUTION=true to enable this tool.")]
+        return False, [TextContent(type="text", text="Error: Code execution is disabled. The server admin must set QWED_MCP_TRUSTED_CODE_EXECUTION=true to enable this tool.")]
         
     code = arguments.get("code", "")
     if not code:
-        return [TextContent(type="text", text="Error: No code provided.")]
+        return False, [TextContent(type="text", text="Error: No code provided.")]
     
     try:
         temp_dir = anyio.Path(tempfile.gettempdir())
@@ -147,8 +157,8 @@ async def execute_python_code_tool(arguments: dict[str, Any]) -> list[TextConten
         )
 
         async def _run_and_read() -> tuple[bytes, bytes]:
-            out_task = asyncio.create_task(_read_stream(proc.stdout))
-            err_task = asyncio.create_task(_read_stream(proc.stderr))
+            out_task = asyncio.create_task(_read_stream(proc.stdout, proc=proc))
+            err_task = asyncio.create_task(_read_stream(proc.stderr, proc=proc))
             
             # Run process wait and stream readers concurrently to avoid deadlock
             stdout_bytes, stderr_bytes, _ = await asyncio.gather(
@@ -159,32 +169,121 @@ async def execute_python_code_tool(arguments: dict[str, Any]) -> list[TextConten
             return stdout_bytes, stderr_bytes
 
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(_run_and_read(), timeout=30.0)
+            # Run without timeout bounds; callers should manage timeouts
+            stdout_bytes, stderr_bytes = await _run_and_read()
             stdout = stdout_bytes.decode('utf-8', errors='replace') if stdout_bytes else ""
             stderr = stderr_bytes.decode('utf-8', errors='replace') if stderr_bytes else ""
             returncode = proc.returncode
-        except asyncio.TimeoutError:
+        except asyncio.CancelledError:
             await _kill_process(proc)
             await _cleanup_script(script_path_obj)
-            return [TextContent(type="text", text="Execution timed out after 30 seconds.")]
+            raise
         finally:
             _close_streams(proc)
         
         await _cleanup_script(script_path_obj)
         final_output = _format_output(stdout, stderr, returncode)
         
-        return [TextContent(type="text", text=final_output)]
+        success = (returncode == 0)
+        return success, [TextContent(type="text", text=final_output)]
         
     except Exception as e:
         logger.error(f"Error executing code: {e}")
         if 'script_path_obj' in locals():
             await _cleanup_script(script_path_obj)
-        return [TextContent(type="text", text=f"Execution error: {str(e)}")]
+        return False, [TextContent(type="text", text=f"Execution error: {str(e)}")]
 
+class AsyncMCPHandler:
+    """
+    Implements async job queues to avoid blocking on long-running MCP tool calls.
+    Allows LLM clients to dispatch heavy tasks and poll them using the 'verification_status' tool.
+    """
+    def __init__(self, max_concurrent_jobs: int = 5):
+        self.pending_verifications: dict[str, dict[str, Any]] = {}
+        self.semaphore = asyncio.Semaphore(max_concurrent_jobs)
+
+    def _prune_pending_verifications(self, ttl_seconds: float = 3600.0) -> None:
+        """Removes pending verifications older than TTL to prevent memory leaks."""
+        current_time = time.time()
+        expired_keys = []
+        for k, v in self.pending_verifications.items():
+            if current_time - v.get("last_updated_at", v.get("created_at", current_time)) > ttl_seconds:
+                if v.get("status") in ["running", "queued"] and v.get("task"):
+                    v["task"].cancel()
+                expired_keys.append(k)
+        
+        for k in expired_keys:
+            del self.pending_verifications[k]
+
+    async def _worker(self, job_id: str, arguments: dict[str, Any]):
+        try:
+            async with self.semaphore:
+                if job_id in self.pending_verifications:
+                    self.pending_verifications[job_id]["status"] = "running"
+                    self.pending_verifications[job_id]["last_updated_at"] = time.time()
+                    
+                # Execute without timeout for background verification
+                success, result_list = await execute_python_code_tool(arguments)
+                
+                if job_id in self.pending_verifications:
+                    self.pending_verifications[job_id]["status"] = "success" if success else "failed"
+                    self.pending_verifications[job_id]["last_updated_at"] = time.time()
+                    if result_list and len(result_list) > 0:
+                        self.pending_verifications[job_id]["result"] = result_list[0].text
+                    else:
+                        self.pending_verifications[job_id]["result"] = "No output"
+        except asyncio.CancelledError:
+            if job_id in self.pending_verifications:
+                self.pending_verifications[job_id]["status"] = "cancelled"
+                self.pending_verifications[job_id]["result"] = "Job was cancelled."
+                self.pending_verifications[job_id]["last_updated_at"] = time.time()
+            raise
+        except Exception as e:
+            if job_id in self.pending_verifications:
+                self.pending_verifications[job_id]["status"] = "failed"
+                self.pending_verifications[job_id]["error"] = str(e)
+                self.pending_verifications[job_id]["last_updated_at"] = time.time()
+                self.pending_verifications[job_id]["result"] = str(e)
+
+    def dispatch_background_worker(self, arguments: dict[str, Any]) -> str:
+        self._prune_pending_verifications()
+        job_id = str(uuid.uuid4())
+        self.pending_verifications[job_id] = {
+            "status": "queued",
+            "result": None,
+            "created_at": time.time(),
+            "last_updated_at": time.time(),
+            "task": None
+        }
+        task = asyncio.create_task(self._worker(job_id, arguments))
+        self.pending_verifications[job_id]["task"] = task
+        return job_id
+
+    def get_status(self, job_id: str) -> str:
+        if job_id in self.pending_verifications:
+            job = self.pending_verifications[job_id]
+            if job["status"] in ["success", "failed", "cancelled"]:
+                result_str = f"Status: {job['status']}\n\nResult:\n{job['result']}"
+                self._prune_pending_verifications()
+                return result_str
+                
+        self._prune_pending_verifications()
+        
+        if job_id not in self.pending_verifications:
+            return f"Error: Job ID '{job_id}' not found or expired."
+        
+        job = self.pending_verifications[job_id]
+        
+        if job["status"] in ["success", "failed", "cancelled"]:
+            return f"Status: {job['status']}\n\nResult:\n{job['result']}"
+        else:
+            return f"Status: {job['status']}..."
 
 def register_tools(server: Server) -> None:
-    """Register the single execution tool with the MCP server."""
+    """Register the execution and background status tools with the MCP server."""
     
+    async_handler = AsyncMCPHandler()
+
     @server.list_tools()
     async def list_tools() -> list[Tool]:
         """List all available QWED verification tools."""
@@ -198,9 +297,27 @@ def register_tools(server: Server) -> None:
                         "code": {
                             "type": "string", 
                             "description": "The Python code to execute."
+                        },
+                        "background": {
+                            "type": "boolean",
+                            "description": "Execute asynchronously in the background and return a tracking job_id. Set to True for heavy logic verifications."
                         }
                     },
                     "required": ["code"]
+                }
+            ),
+            Tool(
+                name="verification_status",
+                description="Check the execution status and output of a background verification task.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "job_id": {
+                            "type": "string",
+                            "description": "The UUID returned by execute_python_code when background=True."
+                        }
+                    },
+                    "required": ["job_id"]
                 }
             )
         ]
@@ -210,7 +327,24 @@ def register_tools(server: Server) -> None:
         """Execute the QWED verification tool."""
         logger.info(f"Calling tool: {name}")
         
-        if name != "execute_python_code":
-            return [TextContent(type="text", text=f"Unknown tool: {name}")]
+        if name == "execute_python_code":
+            if arguments.get("background"):
+                job_id = async_handler.dispatch_background_worker(arguments)
+                msg = f"Verification order is being placed for the request {job_id}. Check back using the 'verification_status' tool."
+                return [TextContent(type="text", text=msg)]
+                
+            try:
+                _, result_content = await asyncio.wait_for(execute_python_code_tool(arguments), timeout=30.0)
+                return result_content
+            except asyncio.TimeoutError:
+                return [TextContent(type="text", text="Execution timed out after 30.0 seconds.")]
             
-        return await execute_python_code_tool(arguments)
+        elif name == "verification_status":
+            job_id = arguments.get("job_id", "")
+            if not job_id:
+                return [TextContent(type="text", text="Error: Missing job_id in arguments.")]
+            status_text = async_handler.get_status(job_id)
+            return [TextContent(type="text", text=status_text)]
+            
+        else:
+            return [TextContent(type="text", text=f"Unknown tool: {name}")]
