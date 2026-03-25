@@ -69,8 +69,8 @@ def _close_streams(proc: asyncio.subprocess.Process) -> None:
             elif hasattr(stream, 'close'):
                 stream.close()
 
-async def _read_stream(stream: asyncio.StreamReader | None, cap_bytes: int = 1024 * 1024) -> bytes:
-    """Read from an async stream up to a maximum byte cap to prevent OOM."""
+async def _read_stream(stream: asyncio.StreamReader | None, proc: asyncio.subprocess.Process | None = None, cap_bytes: int = 1024 * 1024) -> bytes:
+    """Read from an async stream up to a maximum byte cap to prevent OOM. Kills process if cap is reached."""
     if stream is None:
         return b""
     chunks: list[bytes] = []
@@ -84,7 +84,12 @@ async def _read_stream(stream: asyncio.StreamReader | None, cap_bytes: int = 102
             remaining = cap_bytes - bytes_read
             if remaining > 0:
                 chunks.append(chunk[:remaining])
-            chunks.append(b"\n\n[WARNING: OUTPUT TRUNCATED DUE TO 1MB SIZE CAP]")
+            chunks.append(b"\n\n[WARNING: OUTPUT TRUNCATED DUE TO 1MB SIZE CAP. PROCESS TERMINATED.]")
+            if proc:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
             break
             
         chunks.append(chunk)
@@ -148,8 +153,8 @@ async def execute_python_code_tool(arguments: dict[str, Any]) -> tuple[bool, lis
         )
 
         async def _run_and_read() -> tuple[bytes, bytes]:
-            out_task = asyncio.create_task(_read_stream(proc.stdout))
-            err_task = asyncio.create_task(_read_stream(proc.stderr))
+            out_task = asyncio.create_task(_read_stream(proc.stdout, proc=proc))
+            err_task = asyncio.create_task(_read_stream(proc.stderr, proc=proc))
             
             # Run process wait and stream readers concurrently to avoid deadlock
             stdout_bytes, stderr_bytes, _ = await asyncio.gather(
@@ -226,6 +231,7 @@ class AsyncMCPHandler:
         except asyncio.CancelledError:
             if job_id in self.pending_verifications:
                 self.pending_verifications[job_id]["status"] = "cancelled"
+                self.pending_verifications[job_id]["result"] = "Job was cancelled."
                 self.pending_verifications[job_id]["last_updated_at"] = time.time()
             raise
         except Exception as e:
@@ -255,10 +261,6 @@ class AsyncMCPHandler:
             return f"Error: Job ID '{job_id}' not found."
         
         job = self.pending_verifications[job_id]
-        
-        # Sentry High Resolution: Refresh the timestamp when polled by clients
-        if job["status"] in ["queued", "running"]:
-            job["last_updated_at"] = time.time()
         
         if job["status"] in ["success", "failed", "completed", "cancelled"]:
             return f"Status: {job['status']}\n\nResult:\n{job['result']}"

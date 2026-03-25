@@ -62,3 +62,49 @@ async def test_async_handler_error():
 def test_async_handler_invalid_job():
     status = async_handler.get_status("fake-uuid")
     assert "Error: Job ID 'fake-uuid' not found." in status
+
+@pytest.mark.asyncio
+async def test_mcp_round_trip():
+    from mcp.server import Server
+    import re
+    from qwed_mcp.tools import register_tools
+    
+    mock_server = MagicMock(spec=Server)
+    registered_call_tool = None
+    
+    def call_tool_decorator(*args, **kwargs):
+        def decorator(func):
+            nonlocal registered_call_tool
+            registered_call_tool = func
+            return func
+        return decorator
+        
+    def list_tools_decorator(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+        
+    mock_server.call_tool = call_tool_decorator
+    mock_server.list_tools = list_tools_decorator
+    
+    register_tools(mock_server)
+    assert registered_call_tool is not None
+    
+    dispatch_res = await registered_call_tool("execute_python_code", {"code": "print('mcp success')", "background": True})
+    text = dispatch_res[0].text
+    
+    match = re.search(r"request ([a-f0-9\-]+)\.", text)
+    assert match is not None, "Could not extract job ID from background execution response"
+    job_id = match.group(1)
+    
+    # Poll using the public status tool
+    status_text = ""
+    for _ in range(50):
+        status_res = await registered_call_tool("verification_status", {"job_id": job_id})
+        status_text = status_res[0].text
+        if "Status: success" in status_text or "Status: failed" in status_text:
+            break
+        await asyncio.sleep(0.1)
+        
+    assert "Status: success" in status_text
+    assert "mcp success" in status_text
