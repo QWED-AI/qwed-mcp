@@ -30,9 +30,6 @@ async def test_execute_python_code_empty():
     assert len(result) == 1
     assert "Error: No code provided." in result[0].text
 
-from unittest.mock import patch, AsyncMock, MagicMock
-import asyncio
-
 @pytest.mark.asyncio
 @patch("qwed_mcp.tools.asyncio.wait_for", side_effect=asyncio.TimeoutError)
 @patch("qwed_mcp.tools.asyncio.create_subprocess_exec")
@@ -48,25 +45,27 @@ async def test_execute_python_code_timeout(mock_create, mock_wait):
     assert len(result) == 1
     assert "Execution timed out after 30 seconds." in result[0].text
 
+async def _wait_for_job(job_id: str, timeout: float = 5.0, poll_interval: float = 0.1) -> str:
+    """Poll until job completes or timeout."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        status = async_handler.get_status(job_id)
+        if "Status: completed" in status or "Status: failed" in status:
+            return status
+        await asyncio.sleep(poll_interval)
+    raise TimeoutError(f"Job {job_id} did not complete within {timeout}s")
+
 @pytest.mark.asyncio
 async def test_async_handler_success():
     job_id = async_handler.dispatch_background_worker({"code": "print('async success')"})
-    
-    # Wait for the background task to complete
-    # It usually takes a fraction of a second to spin up bash/python and return
-    await asyncio.sleep(1.5)
-    
-    status = async_handler.get_status(job_id)
+    status = await _wait_for_job(job_id)
     assert "Status: completed" in status
     assert "async success" in status
 
 @pytest.mark.asyncio
 async def test_async_handler_error():
     job_id = async_handler.dispatch_background_worker({"code": "1/0"})
-    
-    await asyncio.sleep(1.5)
-    
-    status = async_handler.get_status(job_id)
+    status = await _wait_for_job(job_id)
     assert "Status: completed" in status
     assert "ZeroDivisionError" in status
 

@@ -11,6 +11,7 @@ import sys
 import anyio
 import asyncio
 import uuid
+import time
 import tempfile
 from subprocess import PIPE, DEVNULL
 from typing import Any
@@ -189,6 +190,16 @@ class AsyncMCPHandler:
     def __init__(self):
         self.pending_verifications: dict[str, dict[str, Any]] = {}
 
+    def _prune_pending_verifications(self, ttl_seconds: float = 3600.0) -> None:
+        """Removes pending verifications older than TTL to prevent memory leaks."""
+        current_time = time.time()
+        expired_keys = [
+            k for k, v in self.pending_verifications.items()
+            if current_time - v.get("created_at", current_time) > ttl_seconds
+        ]
+        for k in expired_keys:
+            del self.pending_verifications[k]
+
     async def _worker(self, job_id: str, arguments: dict[str, Any]):
         try:
             self.pending_verifications[job_id]["status"] = "running"
@@ -203,12 +214,19 @@ class AsyncMCPHandler:
             self.pending_verifications[job_id]["result"] = str(e)
 
     def dispatch_background_worker(self, arguments: dict[str, Any]) -> str:
+        self._prune_pending_verifications()
         job_id = str(uuid.uuid4())
-        self.pending_verifications[job_id] = {"status": "queued", "result": None}
-        asyncio.create_task(self._worker(job_id, arguments))
+        task = asyncio.create_task(self._worker(job_id, arguments))
+        self.pending_verifications[job_id] = {
+            "status": "queued", 
+            "result": None,
+            "created_at": time.time(),
+            "task": task
+        }
         return job_id
 
     def get_status(self, job_id: str) -> str:
+        self._prune_pending_verifications()
         if job_id not in self.pending_verifications:
             return f"Error: Job ID '{job_id}' not found."
         
@@ -277,7 +295,7 @@ def register_tools(server: Server) -> None:
         elif name == "verification_status":
             job_id = arguments.get("job_id", "")
             if not job_id:
-                 return [TextContent(type="text", text="Error: Missing job_id in arguments.")]
+                return [TextContent(type="text", text="Error: Missing job_id in arguments.")]
             status_text = async_handler.get_status(job_id)
             return [TextContent(type="text", text=status_text)]
             
