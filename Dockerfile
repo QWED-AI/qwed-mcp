@@ -54,7 +54,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-RUN useradd -m -u 1000 qweduser
+RUN useradd -m qweduser
 USER qweduser
 
 ENTRYPOINT ["qwed-mcp"]
