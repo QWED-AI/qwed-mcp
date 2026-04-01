@@ -39,6 +39,10 @@ jobs:
           python -c "from qwed_mcp.engines.code_engine import verify_code_safety; print('Code engine OK')"
           python -c "from qwed_mcp.engines.sql_engine import verify_sql_query; print('SQL engine OK')"
 
+      - name: Test security imports
+        run: |
+          python -c "from qwed_mcp.security import SkillProvenanceGuard; print('SkillProvenanceGuard OK')"
+
       - name: Test basic verification
         run: |
           python -c "
