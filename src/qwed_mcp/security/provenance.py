@@ -95,10 +95,18 @@ class SkillProvenanceGuard:
         
         if trusted_registries is not None:
             self.enforce_registry_allowlist = True
-            self.trusted_registries = set(trusted_registries)
+            self.trusted_registries = {
+                registry.lower().strip().rstrip(".")
+                for registry in trusted_registries
+                if isinstance(registry, str) and registry.strip()
+            }
             
         if trusted_domains:
-            self.trusted_domains |= trusted_domains
+            self.trusted_domains |= {
+                domain.lower().strip().rstrip(".")
+                for domain in trusted_domains
+                if isinstance(domain, str) and domain.strip()
+            }
         self.require_digest = require_digest
 
     def _validate_registry(self, manifest: Dict[str, Any]) -> List[str]:
@@ -109,7 +117,7 @@ class SkillProvenanceGuard:
             findings.append(f"Invalid registry type: {type(registry).__name__}")
             return findings
             
-        registry = registry.lower().strip()
+        registry = registry.lower().strip().rstrip(".")
         if not registry:
             findings.append("Missing registry field in manifest")
             return findings
@@ -238,9 +246,13 @@ class SkillProvenanceGuard:
             )
             return findings
 
-        if isinstance(download_count, float) and not math.isfinite(download_count):
-            findings.append(f"Invalid download_count (non-finite float): {download_count}")
-            return findings
+        if isinstance(download_count, float):
+            if not math.isfinite(download_count):
+                findings.append(f"Invalid download_count (non-finite float): {download_count}")
+                return findings
+            if not download_count.is_integer():
+                findings.append(f"Invalid download_count (non-integer float): {download_count}")
+                return findings
 
         count = int(download_count)
         if count < self.MIN_DOWNLOAD_COUNT:
@@ -264,18 +276,30 @@ class SkillProvenanceGuard:
         # Exclude metadata fields prone to false positives
         exclude_fields = {"name", "description", "source_url", "registry", "author", "license", "version", "digest"}
         
+        def scan_value(path: str, value: Any) -> None:
+            if isinstance(value, str):
+                for pattern in _MALICIOUS_PATTERNS:
+                    if pattern.search(value):
+                        findings.append(
+                            f"Suspicious pattern '{pattern.pattern}' "
+                            f"in manifest field '{path}'"
+                        )
+                return
+            if isinstance(value, dict):
+                for child_key, child_value in sorted(
+                    value.items(), key=lambda item: str(item[0])
+                ):
+                    scan_value(f"{path}.{child_key}", child_value)
+                return
+            if isinstance(value, (list, tuple)):
+                for idx, child_value in enumerate(value):
+                    scan_value(f"{path}[{idx}]", child_value)
+
         # Scan string values for code injection attempts
         for key, value in sorted(manifest.items(), key=lambda item: str(item[0])):
             if key in exclude_fields:
                 continue
-            if not isinstance(value, str):
-                continue
-            for pattern in _MALICIOUS_PATTERNS:
-                if pattern.search(value):
-                    findings.append(
-                        f"Suspicious pattern '{pattern.pattern}' "
-                        f"in manifest field '{key}'"
-                    )
+            scan_value(str(key), value)
         return findings
 
     def verify_skill(self, manifest: Dict[str, Any]) -> Dict[str, Any]:

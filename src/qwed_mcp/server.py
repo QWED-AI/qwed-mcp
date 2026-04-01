@@ -61,23 +61,31 @@ def track_verification(tool_name: str, result: dict):
 def verify_server_skills():
     """Verify any skills defined in the environment before starting."""
     manifest_path = os.getenv("QWED_SKILL_MANIFEST")
-    if manifest_path and os.path.exists(manifest_path):
-        try:
-            with open(manifest_path, 'r', encoding='utf-8') as f:
-                manifest = json.load(f)
-            
-            logger.info(f"Validating skill manifest at {manifest_path}")
-            guard = SkillProvenanceGuard()
-            result = guard.verify_skill(manifest)
-            
-            if not result["verified"]:
-                logger.error(f"FATAL: Skill validation failed: {result['message']}")
-                sys.exit(1)
-            
-            logger.info(f"Skill '{result.get('skill_name', 'unknown')}' verified successfully.")
-        except Exception as e:
-            logger.error(f"FATAL: Failed to read or parse skill manifest: {e}")
+    if not manifest_path:
+        return
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        if not isinstance(manifest, dict):
+            logger.error("FATAL: Skill manifest must be a JSON object, not an array or primitive.")
             sys.exit(1)
+
+        logger.info(f"Validating skill manifest at {manifest_path}")
+        guard = SkillProvenanceGuard()
+        result = guard.verify_skill(manifest)
+
+        if not result["verified"]:
+            logger.error(f"FATAL: Skill validation failed: {result['message']}")
+            sys.exit(1)
+
+        logger.info(
+            f"Skill '{result.get('skill_name', 'unknown')}' verified successfully."
+        )
+    except Exception as e:
+        logger.error(f"FATAL: Failed to read or parse skill manifest: {e}")
+        sys.exit(1)
 
 
 def create_server() -> Server:

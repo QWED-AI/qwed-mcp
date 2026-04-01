@@ -246,6 +246,14 @@ class TestSkillProvenanceGuard:
         assert result["verified"] is False
         assert any("Invalid download_count type" in f for f in result["findings"])
 
+    def test_download_count_rejects_fractions(self):
+        """Fractional numeric values should be rejected instead of truncated."""
+        guard = SkillProvenanceGuard()
+        result = guard.verify_skill(_make_manifest(download_count=999.9))
+
+        assert result["verified"] is False
+        assert any("non-integer float" in f for f in result["findings"])
+
     # --- Manifest content scanning ---
 
     def test_detects_eval_in_manifest(self):
@@ -280,6 +288,20 @@ class TestSkillProvenanceGuard:
         )
 
         assert result["verified"] is True
+
+    def test_scan_manifest_recursive(self):
+        """Should detect malicious patterns inside nested dictionaries and lists."""
+        guard = SkillProvenanceGuard()
+        result = guard.verify_skill(
+            _make_manifest(
+                hooks={
+                    "post_install": ["echo hello", "eval(compile('malicious', '', 'exec'))"]
+                }
+            )
+        )
+
+        assert result["verified"] is False
+        assert any("Suspicious pattern" in f for f in result["findings"])
 
     # --- Required fields ---
 
