@@ -65,7 +65,7 @@ class SkillProvenanceGuard:
             "version": "1.0.0",
             "source_url": "https://github.com/org/skill",
             "registry": "github.com",
-            "signature": "sha256:abc123...",
+            "digest": "sha256:abc123...",
             "download_count": 150,
         })
         if not result["verified"]:
@@ -80,30 +80,48 @@ class SkillProvenanceGuard:
         self,
         trusted_registries: Optional[Set[str]] = None,
         trusted_domains: Optional[Set[str]] = None,
-        require_signature: bool = True,
+        require_digest: bool = True,
     ):
         """
         Args:
-            trusted_registries: Additional registry domains to trust.
+            trusted_registries: If provided, enforces a strict allowlist of registry domains.
             trusted_domains: Additional source URL domains to trust.
-            require_signature: Whether to enforce cryptographic signing.
+            require_digest: Whether to enforce digest presence.
         """
         self.blocked_registries = set(_UNTRUSTED_REGISTRIES)
         self.trusted_domains = set(_TRUSTED_DOMAINS)
-        if trusted_registries:
-            # If user explicitly trusts a registry, remove it from blocked
-            self.blocked_registries -= trusted_registries
+        self.trusted_registries = set()
+        self.enforce_registry_allowlist = False
+        
+        if trusted_registries is not None:
+            self.enforce_registry_allowlist = True
+            self.trusted_registries = set(trusted_registries)
+            
         if trusted_domains:
             self.trusted_domains |= trusted_domains
-        self.require_signature = require_signature
+        self.require_digest = require_digest
 
     def _validate_registry(self, manifest: Dict[str, Any]) -> List[str]:
         """Check if the skill comes from a blocked registry."""
         findings: List[str] = []
-        registry = manifest.get("registry", "").lower().strip()
+        registry = manifest.get("registry")
+        if not isinstance(registry, str):
+            findings.append(f"Invalid registry type: {type(registry).__name__}")
+            return findings
+            
+        registry = registry.lower().strip()
         if not registry:
             findings.append("Missing registry field in manifest")
             return findings
+            
+        if self.enforce_registry_allowlist:
+            if registry not in self.trusted_registries:
+                findings.append(
+                    f"Skill loaded from untrusted registry: {registry} "
+                    f"(not in explicit allowlist)"
+                )
+            return findings
+            
         for blocked in sorted(self.blocked_registries):
             if blocked in registry:
                 findings.append(
@@ -115,7 +133,12 @@ class SkillProvenanceGuard:
     def _validate_source_url(self, manifest: Dict[str, Any]) -> List[str]:
         """Validate source URL against trusted domain allowlist."""
         findings: List[str] = []
-        source_url = manifest.get("source_url", "").strip()
+        source_url = manifest.get("source_url")
+        if not isinstance(source_url, str):
+            findings.append(f"Invalid source_url type: {type(source_url).__name__}")
+            return findings
+            
+        source_url = source_url.strip()
         if not source_url:
             findings.append("Missing source_url in manifest")
             return findings
@@ -127,7 +150,12 @@ class SkillProvenanceGuard:
             findings.append(f"Invalid source URL: {source_url}")
             return findings
 
-        if not any(domain.endswith(t) for t in sorted(self.trusted_domains)):
+        domain = domain.lower().rstrip('.')
+        if not any(
+            domain == trusted.lower()
+            or domain.endswith(f".{trusted.lower()}")
+            for trusted in self.trusted_domains
+        ):
             findings.append(
                 f"Source URL domain '{domain}' is not in trusted list"
             )
@@ -139,25 +167,30 @@ class SkillProvenanceGuard:
 
         return findings
 
-    def _validate_signature(self, manifest: Dict[str, Any]) -> List[str]:
-        """Verify cryptographic signature is present and well-formed."""
+    def _validate_digest(self, manifest: Dict[str, Any]) -> List[str]:
+        """Verify digest is present and well-formed."""
         findings: List[str] = []
-        if not self.require_signature:
+        if not self.require_digest:
             return findings
 
-        signature = manifest.get("signature", "").strip()
-        if not signature:
+        digest_val = manifest.get("digest")
+        if not isinstance(digest_val, str):
+            findings.append(f"Invalid digest type: {type(digest_val).__name__}")
+            return findings
+            
+        digest_val = digest_val.strip()
+        if not digest_val:
             findings.append(
-                "Missing cryptographic signature — "
+                "Missing digest — "
                 "unsigned skills are not allowed"
             )
             return findings
 
         # Expected format: "algorithm:hex_digest"
-        parts = signature.split(":", 1)
+        parts = digest_val.split(":", 1)
         if len(parts) != 2:
             findings.append(
-                f"Malformed signature format: {signature} "
+                f"Malformed digest format: {digest_val} "
                 f"(expected 'algorithm:hex_digest')"
             )
             return findings
@@ -166,12 +199,12 @@ class SkillProvenanceGuard:
         valid_algos = {"sha256", "sha384", "sha512"}
         if algo.lower() not in valid_algos:
             findings.append(
-                f"Unsupported signature algorithm: {algo} "
+                f"Unsupported digest algorithm: {algo} "
                 f"(accepted: {', '.join(sorted(valid_algos))})"
             )
         elif not re.match(r"^[0-9a-fA-F]+$", digest):
             findings.append(
-                f"Invalid signature digest (not hex): {digest[:32]}..."
+                f"Invalid digest (not hex): {digest[:32]}..."
             )
 
         return findings
@@ -232,7 +265,7 @@ class SkillProvenanceGuard:
                 - version (str): Skill version
                 - source_url (str): Source repository URL
                 - registry (str): Registry domain
-                - signature (str): Cryptographic signature
+                - digest (str): Cryptographic digest
                 - download_count (int): Number of downloads
 
         Returns:
@@ -255,7 +288,7 @@ class SkillProvenanceGuard:
         # Run all validation checks
         all_findings.extend(self._validate_registry(manifest))
         all_findings.extend(self._validate_source_url(manifest))
-        all_findings.extend(self._validate_signature(manifest))
+        all_findings.extend(self._validate_digest(manifest))
         all_findings.extend(self._detect_download_anomalies(manifest))
         all_findings.extend(self._scan_manifest_content(manifest))
 
@@ -274,7 +307,7 @@ class SkillProvenanceGuard:
         # Classify risk
         high_risk_keywords = {
             "untrusted registry", "Suspicious pattern",
-            "Missing cryptographic signature", "Malformed signature",
+            "Missing digest", "Malformed digest",
         }
         has_high_risk = any(
             any(kw in f for kw in high_risk_keywords)
