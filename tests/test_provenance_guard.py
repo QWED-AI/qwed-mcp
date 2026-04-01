@@ -146,6 +146,22 @@ class TestSkillProvenanceGuard:
 
         assert result["verified"] is True
 
+    def test_digest_not_required_but_malformed_flagged(self):
+        """When digest is not required, provided digests must still be valid."""
+        guard = SkillProvenanceGuard(require_digest=False)
+        result1 = guard.verify_skill(_make_manifest(digest="md5:deadbeef"))
+        assert result1["verified"] is False
+        assert any("Unsupported digest algorithm" in f for f in result1["findings"])
+
+        result2 = guard.verify_skill(_make_manifest(digest=123))
+        assert result2["verified"] is False
+        assert any("Invalid digest type" in f for f in result2["findings"])
+
+        manifest = _make_manifest()
+        manifest["digest"] = None
+        result3 = guard.verify_skill(manifest) # Missing is allowed
+        assert result3["verified"] is True
+
     def test_malformed_digest_flagged(self):
         """Malformed digests should be flagged."""
         guard = SkillProvenanceGuard()
@@ -284,7 +300,7 @@ class TestSkillProvenanceGuard:
         """Non-string fields should be handled gracefully."""
         guard = SkillProvenanceGuard()
         result = guard.verify_skill(
-            _make_manifest(registry=["array"], source_url=123, digest=None)
+            _make_manifest(registry=["array"], source_url=123, digest=123)
         )
         assert result["verified"] is False
         assert any("Invalid registry type" in f for f in result["findings"])

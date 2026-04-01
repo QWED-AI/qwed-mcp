@@ -13,6 +13,7 @@ This guard enforces:
 - Download count anomaly detection (bot inflation signals)
 """
 
+import math
 import re
 from typing import Any, Dict, FrozenSet, List, Optional, Set
 from urllib.parse import urlparse
@@ -64,7 +65,7 @@ class SkillProvenanceGuard:
             "version": "1.0.0",
             "source_url": "https://github.com/org/skill",
             "registry": "github.com",
-            "digest": "sha256:abc123...",
+            "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "download_count": 150,
         })
         if not result["verified"]:
@@ -169,20 +170,27 @@ class SkillProvenanceGuard:
     def _validate_digest(self, manifest: Dict[str, Any]) -> List[str]:
         """Verify digest is present and well-formed."""
         findings: List[str] = []
-        if not self.require_digest:
+        digest_val = manifest.get("digest")
+
+        if digest_val is None:
+            if self.require_digest:
+                findings.append(
+                    "Missing digest — "
+                    "unsigned skills are not allowed"
+                )
             return findings
 
-        digest_val = manifest.get("digest")
         if not isinstance(digest_val, str):
             findings.append(f"Invalid digest type: {type(digest_val).__name__}")
             return findings
             
         digest_val = digest_val.strip()
         if not digest_val:
-            findings.append(
-                "Missing digest — "
-                "unsigned skills are not allowed"
-            )
+            if self.require_digest:
+                findings.append(
+                    "Missing digest — "
+                    "unsigned skills are not allowed"
+                )
             return findings
 
         # Expected format: "algorithm:hex_digest"
@@ -228,6 +236,10 @@ class SkillProvenanceGuard:
             findings.append(
                 f"Invalid download_count type: {type(download_count).__name__}"
             )
+            return findings
+
+        if isinstance(download_count, float) and not math.isfinite(download_count):
+            findings.append(f"Invalid download_count (non-finite float)")
             return findings
 
         count = int(download_count)
@@ -288,12 +300,19 @@ class SkillProvenanceGuard:
                 - message (str): Human-readable summary.
         """
         all_findings: List[str] = []
-        skill_name = manifest.get("name", "unknown")
+        raw_name = manifest.get("name")
+        skill_name = (
+            raw_name.strip()
+            if isinstance(raw_name, str) and raw_name.strip()
+            else "unknown"
+        )
 
         # Required field check
-        if not manifest.get("name"):
+        if not isinstance(raw_name, str) or not raw_name.strip():
             all_findings.append("Missing required field: name")
-        if not manifest.get("version"):
+            
+        raw_version = manifest.get("version")
+        if not isinstance(raw_version, str) or not raw_version.strip():
             all_findings.append("Missing required field: version")
 
         # Run all validation checks

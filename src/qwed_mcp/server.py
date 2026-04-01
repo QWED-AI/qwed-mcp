@@ -5,12 +5,15 @@ Main MCP server implementation with QWED verification tools.
 """
 
 import logging
+import sys
+import json
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 import sentry_sdk
 import os
 
 from .tools import register_tools
+from .security.provenance import SkillProvenanceGuard
 
 # Configure logging to stderr (required for MCP)
 logging.basicConfig(
@@ -55,8 +58,33 @@ def track_verification(tool_name: str, result: dict):
             sentry_sdk.set_context("verification_details", result)
 
 
+def verify_server_skills():
+    """Verify any skills defined in the environment before starting."""
+    manifest_path = os.getenv("QWED_SKILL_MANIFEST")
+    if manifest_path and os.path.exists(manifest_path):
+        try:
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+            
+            logger.info(f"Validating skill manifest at {manifest_path}")
+            guard = SkillProvenanceGuard()
+            result = guard.verify_skill(manifest)
+            
+            if not result["verified"]:
+                logger.error(f"FATAL: Skill validation failed: {result['message']}")
+                sys.exit(1)
+            
+            logger.info(f"Skill '{result.get('skill_name', 'unknown')}' verified successfully.")
+        except Exception as e:
+            logger.error(f"FATAL: Failed to read or parse skill manifest: {e}")
+            sys.exit(1)
+
+
 def create_server() -> Server:
     """Create and configure the QWED MCP server."""
+    # Verify skill provenance before creating server to prevent poisoned plugins
+    verify_server_skills()
+
     # Register all verification tools
     register_tools(mcp)
     
