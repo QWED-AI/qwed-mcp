@@ -8,12 +8,11 @@ into loading and executing unvetted code within their agentic pipelines.
 
 This guard enforces:
 - Registry allowlisting (blocks known unvetted sources)
-- Cryptographic signing requirement (manifest signature verification)
+- Digest format requirement (algorithm:hex_digest presence check)
 - Source URL validation against trusted domains
 - Download count anomaly detection (bot inflation signals)
 """
 
-import hashlib
 import re
 from typing import Any, Dict, FrozenSet, List, Optional, Set
 from urllib.parse import urlparse
@@ -45,7 +44,7 @@ _MALICIOUS_PATTERNS = [
     re.compile(r"\b__import__\s*\("),
     re.compile(r"\bos\.system\s*\("),
     re.compile(r"\bsubprocess\.(call|run|Popen)\s*\("),
-    re.compile(r"\bcredentials|api[_-]?key|secret[_-]?key", re.IGNORECASE),
+    re.compile(r"\b(credentials|api[_-]?key|secret[_-]?key)\b", re.IGNORECASE),
     re.compile(r"\bopen\s*\(.*(\/etc\/|\/root\/|\.ssh\/|\.aws\/)", re.IGNORECASE),
     re.compile(r"\brequests\.(get|post)\s*\(.*\b(pastebin|ngrok|burp)", re.IGNORECASE),
 ]
@@ -197,6 +196,7 @@ class SkillProvenanceGuard:
 
         algo, digest = parts
         valid_algos = {"sha256", "sha384", "sha512"}
+        expected_lengths = {"sha256": 64, "sha384": 96, "sha512": 128}
         if algo.lower() not in valid_algos:
             findings.append(
                 f"Unsupported digest algorithm: {algo} "
@@ -205,6 +205,11 @@ class SkillProvenanceGuard:
         elif not re.match(r"^[0-9a-fA-F]+$", digest):
             findings.append(
                 f"Invalid digest (not hex): {digest[:32]}..."
+            )
+        elif len(digest) != expected_lengths[algo.lower()]:
+            findings.append(
+                f"Invalid digest length for {algo}: expected "
+                f"{expected_lengths[algo.lower()]} hex chars, got {len(digest)}"
             )
 
         return findings
@@ -244,7 +249,7 @@ class SkillProvenanceGuard:
         """Scan manifest fields for embedded malicious patterns."""
         findings: List[str] = []
         # Scan string values for code injection attempts
-        for key, value in sorted(manifest.items()):
+        for key, value in sorted(manifest.items(), key=lambda item: str(item[0])):
             if not isinstance(value, str):
                 continue
             for pattern in _MALICIOUS_PATTERNS:
