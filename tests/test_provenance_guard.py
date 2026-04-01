@@ -170,6 +170,7 @@ class TestSkillProvenanceGuard:
         )
 
         assert result["verified"] is False
+        assert result["risk_level"] == "high"
         assert any("Malformed digest" in f for f in result["findings"])
 
     def test_unsupported_algorithm_flagged(self):
@@ -180,6 +181,7 @@ class TestSkillProvenanceGuard:
         )
 
         assert result["verified"] is False
+        assert result["risk_level"] == "high"
         assert any("Unsupported digest algorithm" in f for f in result["findings"])
 
     def test_invalid_hex_digest_flagged(self):
@@ -190,6 +192,7 @@ class TestSkillProvenanceGuard:
         )
 
         assert result["verified"] is False
+        assert result["risk_level"] == "high"
         assert any("not hex" in f for f in result["findings"])
 
     def test_valid_sha384_accepted(self):

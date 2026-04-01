@@ -239,7 +239,7 @@ class SkillProvenanceGuard:
             return findings
 
         if isinstance(download_count, float) and not math.isfinite(download_count):
-            findings.append(f"Invalid download_count (non-finite float)")
+            findings.append(f"Invalid download_count (non-finite float): {download_count}")
             return findings
 
         count = int(download_count)
@@ -338,6 +338,7 @@ class SkillProvenanceGuard:
         high_risk_keywords = {
             "untrusted registry", "Suspicious pattern",
             "Missing digest", "Malformed digest",
+            "Invalid digest", "Unsupported digest algorithm"
         }
         has_high_risk = any(
             any(kw in f for kw in high_risk_keywords)
