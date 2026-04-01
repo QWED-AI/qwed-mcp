@@ -219,13 +219,21 @@ class TestSkillProvenanceGuard:
 
         assert result["verified"] is True
 
+    def test_download_count_rejects_bool(self):
+        """Boolean values should be rejected for download count despite being int subclasses."""
+        guard = SkillProvenanceGuard()
+        result = guard.verify_skill(_make_manifest(download_count=True))
+
+        assert result["verified"] is False
+        assert any("Invalid download_count type" in f for f in result["findings"])
+
     # --- Manifest content scanning ---
 
     def test_detects_eval_in_manifest(self):
         """Should detect code injection patterns in manifest fields."""
         guard = SkillProvenanceGuard()
         result = guard.verify_skill(
-            _make_manifest(description="eval(compile('malicious', '', 'exec'))")
+            _make_manifest(build_script="eval(compile('malicious', '', 'exec'))")
         )
 
         assert result["verified"] is False
@@ -240,6 +248,19 @@ class TestSkillProvenanceGuard:
 
         assert result["verified"] is False
         assert any("Suspicious pattern" in f for f in result["findings"])
+
+    def test_allows_benign_hyphenated_credentials_in_metadata(self):
+        """Should not flag metadata fields like name/source_url containing 'credentials'."""
+        guard = SkillProvenanceGuard()
+        result = guard.verify_skill(
+            _make_manifest(
+                name="aws-credentials-helper", 
+                source_url="https://github.com/org/aws-credentials-helper",
+                description="Managing aws credentials"
+            )
+        )
+
+        assert result["verified"] is True
 
     # --- Required fields ---
 

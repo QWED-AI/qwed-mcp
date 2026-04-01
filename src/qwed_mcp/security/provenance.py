@@ -224,7 +224,7 @@ class SkillProvenanceGuard:
         if download_count is None:
             return findings
 
-        if not isinstance(download_count, (int, float)):
+        if isinstance(download_count, bool) or not isinstance(download_count, (int, float)):
             findings.append(
                 f"Invalid download_count type: {type(download_count).__name__}"
             )
@@ -248,8 +248,14 @@ class SkillProvenanceGuard:
     def _scan_manifest_content(self, manifest: Dict[str, Any]) -> List[str]:
         """Scan manifest fields for embedded malicious patterns."""
         findings: List[str] = []
+        
+        # Exclude metadata fields prone to false positives
+        exclude_fields = {"name", "description", "source_url", "registry", "author", "license", "version", "digest"}
+        
         # Scan string values for code injection attempts
         for key, value in sorted(manifest.items(), key=lambda item: str(item[0])):
+            if key in exclude_fields:
+                continue
             if not isinstance(value, str):
                 continue
             for pattern in _MALICIOUS_PATTERNS:
