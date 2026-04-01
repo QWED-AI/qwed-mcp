@@ -51,6 +51,29 @@ _MALICIOUS_PATTERNS = [
 ]
 
 
+def _scan_value_recursive(
+    path: str, value: Any, findings: List[str]
+) -> None:
+    """Recursively scan manifest values for malicious patterns."""
+    if isinstance(value, str):
+        for pattern in _MALICIOUS_PATTERNS:
+            if pattern.search(value):
+                findings.append(
+                    f"Suspicious pattern '{pattern.pattern}' "
+                    f"in manifest field '{path}'"
+                )
+        return
+    if isinstance(value, dict):
+        for child_key, child_value in sorted(
+            value.items(), key=lambda item: str(item[0])
+        ):
+            _scan_value_recursive(f"{path}.{child_key}", child_value, findings)
+        return
+    if isinstance(value, (list, tuple)):
+        for idx, child_value in enumerate(value):
+            _scan_value_recursive(f"{path}[{idx}]", child_value, findings)
+
+
 class SkillProvenanceGuard:
     """
     Deterministic skill provenance verification for MCP-loaded tools.
@@ -276,30 +299,11 @@ class SkillProvenanceGuard:
         # Exclude metadata fields prone to false positives
         exclude_fields = {"name", "description", "source_url", "registry", "author", "license", "version", "digest"}
         
-        def scan_value(path: str, value: Any) -> None:
-            if isinstance(value, str):
-                for pattern in _MALICIOUS_PATTERNS:
-                    if pattern.search(value):
-                        findings.append(
-                            f"Suspicious pattern '{pattern.pattern}' "
-                            f"in manifest field '{path}'"
-                        )
-                return
-            if isinstance(value, dict):
-                for child_key, child_value in sorted(
-                    value.items(), key=lambda item: str(item[0])
-                ):
-                    scan_value(f"{path}.{child_key}", child_value)
-                return
-            if isinstance(value, (list, tuple)):
-                for idx, child_value in enumerate(value):
-                    scan_value(f"{path}[{idx}]", child_value)
-
         # Scan string values for code injection attempts
         for key, value in sorted(manifest.items(), key=lambda item: str(item[0])):
             if key in exclude_fields:
                 continue
-            scan_value(str(key), value)
+            _scan_value_recursive(str(key), value, findings)
         return findings
 
     def verify_skill(self, manifest: Dict[str, Any]) -> Dict[str, Any]:
