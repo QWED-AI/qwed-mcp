@@ -18,6 +18,8 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import Tool, TextContent
 
+from .security import RiskBasedExecutionGateway
+
 logger = logging.getLogger("qwed-mcp.tools")
 
 def _is_valid_pgid(pgid: Any) -> bool:
@@ -120,7 +122,9 @@ def _format_output(stdout: str, stderr: str, returncode: int | None) -> str:
 
 async def execute_python_code_tool(arguments: dict[str, Any]) -> tuple[bool, list[TextContent]]:
     """Execute the provided python code in a subprocess. Returns (success, TextContent)."""
-    
+
+    # Safety net: validated by RiskBasedExecutionGateway before normal dispatch.
+    # These checks remain here to fail closed if this function is ever called directly.
     trusted_mode = os.getenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "false").lower() == "true"
     if not trusted_mode:
         return False, [TextContent(type="text", text="Error: Code execution is disabled. The server admin must set QWED_MCP_TRUSTED_CODE_EXECUTION=true to enable this tool.")]
@@ -283,6 +287,7 @@ def register_tools(server: Server) -> None:
     """Register the execution and background status tools with the MCP server."""
     
     async_handler = AsyncMCPHandler()
+    risk_gateway = RiskBasedExecutionGateway()
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
@@ -326,25 +331,47 @@ def register_tools(server: Server) -> None:
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         """Execute the QWED verification tool."""
         logger.info(f"Calling tool: {name}")
+        decision = risk_gateway.evaluate_and_route(name, arguments)
+        if not decision["verified"]:
+            message = (
+                f"{decision['status']}: {decision['message']} "
+                f"(verification_id={decision['verification_id']})"
+            )
+            return [TextContent(type="text", text=message)]
+
+        normalized_arguments = decision["normalized_arguments"]
         
         if name == "execute_python_code":
-            if arguments.get("background"):
-                job_id = async_handler.dispatch_background_worker(arguments)
+            if normalized_arguments.get("background"):
+                job_id = async_handler.dispatch_background_worker(normalized_arguments)
                 msg = f"Verification order is being placed for the request {job_id}. Check back using the 'verification_status' tool."
                 return [TextContent(type="text", text=msg)]
                 
             try:
-                _, result_content = await asyncio.wait_for(execute_python_code_tool(arguments), timeout=30.0)
+                _, result_content = await asyncio.wait_for(execute_python_code_tool(normalized_arguments), timeout=30.0)
                 return result_content
             except asyncio.TimeoutError:
                 return [TextContent(type="text", text="Execution timed out after 30.0 seconds.")]
             
         elif name == "verification_status":
-            job_id = arguments.get("job_id", "")
+            job_id = normalized_arguments.get("job_id", "")
             if not job_id:
                 return [TextContent(type="text", text="Error: Missing job_id in arguments.")]
             status_text = async_handler.get_status(job_id)
             return [TextContent(type="text", text=status_text)]
-            
-        else:
-            return [TextContent(type="text", text=f"Unknown tool: {name}")]
+
+        # Safety net: unknown tools should already be blocked by _TOOL_POLICIES
+        # via QWED-MCP-RISK-001 before dispatch reaches this point.
+        logger.error(
+            "Governance invariant violated: tool '%s' reached dispatch without verification",
+            name,
+        )
+        return [
+            TextContent(
+                type="text",
+                text=(
+                    "BLOCKED: Internal governance error. Unexpected tool bypassed "
+                    "policy QWED-MCP-RISK-001."
+                ),
+            )
+        ]
