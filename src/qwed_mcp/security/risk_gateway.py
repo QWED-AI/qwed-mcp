@@ -82,7 +82,17 @@ class RiskBasedExecutionGateway:
             "background": background,
         }
         verification_id = self._build_verification_id(tool_name, normalized_arguments)
-        verification = verify_code_safety(code, "python")
+        try:
+            verification = verify_code_safety(code, "python")
+        except Exception as exc:
+            return self._blocked(
+                tool_name=tool_name,
+                risk_level=policy["risk_level"],
+                message=f"QWED blocked python execution: verification error: {exc}",
+                arguments=normalized_arguments,
+                error_code="QWED-MCP-RISK-005",
+                verification_id=verification_id,
+            )
         if not verification.get("verified", False):
             issues = verification.get("issues", [])
             issue_text = "; ".join(issues) if issues else verification.get(

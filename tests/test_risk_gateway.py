@@ -1,4 +1,5 @@
 import uuid
+from unittest.mock import patch
 
 from qwed_mcp.security import RiskBasedExecutionGateway
 
@@ -40,6 +41,24 @@ def test_execute_python_code_returns_verified_allow_when_safe(monkeypatch):
     assert result["status"] == "ALLOW_VERIFIED"
     assert result["risk_level"] == "high"
     assert result["normalized_arguments"]["background"] is True
+
+
+def test_execute_python_code_blocks_when_verifier_raises(monkeypatch):
+    monkeypatch.setenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "true")
+    gateway = RiskBasedExecutionGateway()
+
+    with patch(
+        "qwed_mcp.security.risk_gateway.verify_code_safety",
+        side_effect=RuntimeError("boom"),
+    ):
+        result = gateway.evaluate_and_route(
+            "execute_python_code", {"code": "print('safe')"}
+        )
+
+    assert result["verified"] is False
+    assert result["status"] == "BLOCKED"
+    assert result["error_code"] == "QWED-MCP-RISK-005"
+    assert "verification error: boom" in result["message"].lower()
 
 
 def test_execute_python_code_respects_admin_policy_after_verification(monkeypatch):

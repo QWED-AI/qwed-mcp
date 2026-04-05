@@ -11,6 +11,33 @@ async def handler_fixture():
     """Provides an initialized AsyncMCPHandler in the running async event loop."""
     return AsyncMCPHandler()
 
+
+@pytest.fixture
+def mock_mcp_call_tool():
+    """Register tools on a mock MCP server and return the call_tool handler."""
+    from mcp.server import Server
+    from qwed_mcp.tools import register_tools
+
+    mock_server = MagicMock(spec=Server)
+    registered_call_tool = None
+
+    def call_tool_decorator(*args, **kwargs):
+        def decorator(func):
+            nonlocal registered_call_tool
+            registered_call_tool = func
+            return func
+        return decorator
+
+    def list_tools_decorator(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+    mock_server.call_tool = call_tool_decorator
+    mock_server.list_tools = list_tools_decorator
+    register_tools(mock_server)
+    return registered_call_tool
+
 # Ensure tests bypass the trusted mode execution guard
 os.environ["QWED_MCP_TRUSTED_CODE_EXECUTION"] = "true"
 
@@ -70,32 +97,10 @@ async def test_async_handler_invalid_job(handler_fixture):
     assert "Error: Job ID 'fake-uuid' not found or expired." in status
 
 @pytest.mark.asyncio
-async def test_mcp_round_trip():
-    from mcp.server import Server
+async def test_mcp_round_trip(mock_mcp_call_tool):
     import re
-    from qwed_mcp.tools import register_tools
-    
-    mock_server = MagicMock(spec=Server)
-    registered_call_tool = None
-    
-    def call_tool_decorator(*args, **kwargs):
-        def decorator(func):
-            nonlocal registered_call_tool
-            registered_call_tool = func
-            return func
-        return decorator
-        
-    def list_tools_decorator(*args, **kwargs):
-        def decorator(func):
-            return func
-        return decorator
-        
-    mock_server.call_tool = call_tool_decorator
-    mock_server.list_tools = list_tools_decorator
-    
-    register_tools(mock_server)
-    
-    dispatch_res = await registered_call_tool("execute_python_code", {"code": "print('mcp success')", "background": True})
+
+    dispatch_res = await mock_mcp_call_tool("execute_python_code", {"code": "print('mcp success')", "background": True})
     text = dispatch_res[0].text
     
     match = re.search(r"request ([a-f0-9\-]+)\.", text)
@@ -105,7 +110,7 @@ async def test_mcp_round_trip():
     # Poll using the public status tool
     status_text = ""
     for _ in range(50):
-        status_res = await registered_call_tool("verification_status", {"job_id": job_id})
+        status_res = await mock_mcp_call_tool("verification_status", {"job_id": job_id})
         status_text = status_res[0].text
         if "Status: success" in status_text or "Status: failed" in status_text:
             break
@@ -118,65 +123,21 @@ async def test_mcp_round_trip():
 
 
 @pytest.mark.asyncio
-async def test_mcp_blocks_unknown_tool_before_dispatch():
-    from mcp.server import Server
-    from qwed_mcp.tools import register_tools
-
-    mock_server = MagicMock(spec=Server)
-    registered_call_tool = None
-
-    def call_tool_decorator(*args, **kwargs):
-        def decorator(func):
-            nonlocal registered_call_tool
-            registered_call_tool = func
-            return func
-        return decorator
-
-    def list_tools_decorator(*args, **kwargs):
-        def decorator(func):
-            return func
-        return decorator
-
-    mock_server.call_tool = call_tool_decorator
-    mock_server.list_tools = list_tools_decorator
-
-    register_tools(mock_server)
-
-    response = await registered_call_tool("unknown_tool", {})
+async def test_mcp_blocks_unknown_tool_before_dispatch(mock_mcp_call_tool):
+    response = await mock_mcp_call_tool("unknown_tool", {})
 
     assert "BLOCKED" in response[0].text
     assert "verification_id=" in response[0].text
 
 
 @pytest.mark.asyncio
-async def test_mcp_blocks_unsafe_python_before_execution(monkeypatch):
-    from mcp.server import Server
-    from qwed_mcp.tools import register_tools
-
+async def test_mcp_blocks_unsafe_python_before_execution(
+    monkeypatch, mock_mcp_call_tool
+):
     monkeypatch.setenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "true")
 
-    mock_server = MagicMock(spec=Server)
-    registered_call_tool = None
-
-    def call_tool_decorator(*args, **kwargs):
-        def decorator(func):
-            nonlocal registered_call_tool
-            registered_call_tool = func
-            return func
-        return decorator
-
-    def list_tools_decorator(*args, **kwargs):
-        def decorator(func):
-            return func
-        return decorator
-
-    mock_server.call_tool = call_tool_decorator
-    mock_server.list_tools = list_tools_decorator
-
-    register_tools(mock_server)
-
     with patch("qwed_mcp.tools.execute_python_code_tool", new_callable=AsyncMock) as mock_exec:
-        response = await registered_call_tool(
+        response = await mock_mcp_call_tool(
             "execute_python_code", {"code": "eval(input())"}
         )
 

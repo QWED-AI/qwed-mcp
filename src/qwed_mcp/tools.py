@@ -357,10 +357,7 @@ def register_tools(server: Server) -> None:
                 return [TextContent(type="text", text="Error: Missing job_id in arguments.")]
             status_text = async_handler.get_status(job_id)
             return [TextContent(type="text", text=status_text)]
-            
-        else:
-            message = (
-                f"BLOCKED: Unknown MCP tool '{name}' cannot be executed "
-                "outside the QWED governance layer."
-            )
-            return [TextContent(type="text", text=message)]
+
+        # Safety net: unknown tools should already be blocked by _TOOL_POLICIES
+        # via QWED-MCP-RISK-001 before dispatch reaches this point.
+        raise AssertionError(f"Unexpected tool '{name}' bypassed the governance gateway")
