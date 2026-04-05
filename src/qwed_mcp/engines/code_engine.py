@@ -29,6 +29,7 @@ _DANGEROUS_CALLS = {
     "pickle.loads",
     "marshal.loads",
 }
+_DANGEROUS_BARE_NAMES = {"__import__"}
 
 # Dangerous patterns for Python
 DANGEROUS_PYTHON_PATTERNS = [
@@ -163,14 +164,11 @@ def analyze_python(code: str) -> List[str]:
                     module_aliases=module_aliases,
                     imported_name_aliases=imported_name_aliases,
                 )
-                if resolved_name in _DANGEROUS_CALLS:
+                if _is_dangerous_call_name(resolved_name):
                     issues.append(f"Dangerous function call: {resolved_name}()")
-                elif any(
-                    resolved_name == module
-                    or resolved_name.startswith(f"{module}.")
-                    for module in _DANGEROUS_IMPORT_MODULES
-                ):
-                    issues.append(f"Dangerous function call: {resolved_name}()")
+
+            if isinstance(node, ast.Name) and node.id in _DANGEROUS_BARE_NAMES:
+                issues.append(f"Dangerous name reference detected: {node.id}")
                 
     except SyntaxError as e:
         issues.append(f"Syntax error in code: {e}")
@@ -248,3 +246,13 @@ def resolve_call_name(
         return f"{resolved_root}.{remainder}"
 
     return ""
+
+
+def _is_dangerous_call_name(resolved_name: str) -> bool:
+    """Return True when a resolved call target is explicitly dangerous."""
+    if resolved_name in _DANGEROUS_CALLS:
+        return True
+    return any(
+        resolved_name == module or resolved_name.startswith(f"{module}.")
+        for module in _DANGEROUS_IMPORT_MODULES
+    )

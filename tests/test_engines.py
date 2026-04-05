@@ -127,6 +127,13 @@ class TestCodeEngine:
         assert result["verified"] is False
         assert any("os.popen()" in issue for issue in result["issues"])
 
+    def test_import_alias_of___import___is_flagged(self):
+        from qwed_mcp.engines.code_engine import verify_code_safety
+
+        result = verify_code_safety("fn = __import__\nfn('os')", "python")
+        assert result["verified"] is False
+        assert any("__import__" in issue for issue in result["issues"])
+
 
 class TestSQLEngine:
     """Tests for the SQL verification engine."""
