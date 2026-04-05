@@ -14,8 +14,20 @@ logger = logging.getLogger("qwed-mcp.engines.code")
 _DANGEROUS_IMPORT_MODULES = {"subprocess"}
 _DANGEROUS_IMPORTED_MEMBERS = {
     ("os", "system"),
+    ("os", "popen"),
     ("pickle", "loads"),
     ("marshal", "loads"),
+}
+_DANGEROUS_CALLS = {
+    "eval",
+    "exec",
+    "compile",
+    "open",
+    "__import__",
+    "os.system",
+    "os.popen",
+    "pickle.loads",
+    "marshal.loads",
 }
 
 # Dangerous patterns for Python
@@ -25,6 +37,7 @@ DANGEROUS_PYTHON_PATTERNS = [
     "__import__",
     "compile",
     "os.system",
+    "os.popen",
     "subprocess",
     "pickle.loads",
     "marshal.loads",
@@ -101,16 +114,20 @@ def analyze_python(code: str) -> List[str]:
     """Analyze Python code for security issues."""
     issues = []
     ast_parsed_successfully = False
+    module_aliases: dict[str, str] = {}
+    imported_name_aliases: dict[str, str] = {}
     
     # Try AST analysis
     try:
         tree = ast.parse(code)
         ast_parsed_successfully = True
-        
+
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     imported_name = alias.name
+                    alias_name = alias.asname or imported_name.split(".")[0]
+                    module_aliases[alias_name] = imported_name
                     if any(
                         imported_name == module
                         or imported_name.startswith(f"{module}.")
@@ -131,26 +148,29 @@ def analyze_python(code: str) -> List[str]:
                         f"Dangerous import detected: from {module_name} import ..."
                     )
                 for alias in node.names:
+                    alias_name = alias.asname or alias.name
+                    imported_name_aliases[alias_name] = f"{module_name}.{alias.name}"
                     if (module_name, alias.name) in _DANGEROUS_IMPORTED_MEMBERS:
                         issues.append(
                             f"Dangerous import detected: from {module_name} import {alias.name}"
                         )
-
+        
+        for node in ast.walk(tree):
             # Check for dangerous function calls
             if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name):
-                    if node.func.id in ["eval", "exec", "compile", "open"]:
-                        issues.append(f"Dangerous function call: {node.func.id}()")
-                        
-                elif isinstance(node.func, ast.Attribute):
-                    full_name = f"{get_attr_name(node.func)}"
-                    for pattern in DANGEROUS_PYTHON_PATTERNS:
-                        if pattern in full_name:
-                            issues.append(f"Dangerous pattern: {full_name}")
-            
-            # Check for __import__
-            if isinstance(node, ast.Name) and node.id == "__import__":
-                issues.append("Use of __import__ detected")
+                resolved_name = resolve_call_name(
+                    node.func,
+                    module_aliases=module_aliases,
+                    imported_name_aliases=imported_name_aliases,
+                )
+                if resolved_name in _DANGEROUS_CALLS:
+                    issues.append(f"Dangerous function call: {resolved_name}()")
+                elif any(
+                    resolved_name == module
+                    or resolved_name.startswith(f"{module}.")
+                    for module in _DANGEROUS_IMPORT_MODULES
+                ):
+                    issues.append(f"Dangerous function call: {resolved_name}()")
                 
     except SyntaxError as e:
         issues.append(f"Syntax error in code: {e}")
@@ -206,4 +226,25 @@ def get_attr_name(node) -> str:
         return f"{get_attr_name(node.value)}.{node.attr}"
     elif isinstance(node, ast.Name):
         return node.id
+    return ""
+
+
+def resolve_call_name(
+    node: ast.AST,
+    *,
+    module_aliases: dict[str, str],
+    imported_name_aliases: dict[str, str],
+) -> str:
+    """Resolve a function call name including common import aliases."""
+    if isinstance(node, ast.Name):
+        return imported_name_aliases.get(node.id, node.id)
+
+    if isinstance(node, ast.Attribute):
+        full_name = get_attr_name(node)
+        root, separator, remainder = full_name.partition(".")
+        if not separator:
+            return full_name
+        resolved_root = imported_name_aliases.get(root, module_aliases.get(root, root))
+        return f"{resolved_root}.{remainder}"
+
     return ""

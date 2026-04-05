@@ -106,6 +106,27 @@ class TestCodeEngine:
         assert result["verified"] is False
         assert any("from os import system" in issue for issue in result["issues"])
 
+    def test_aliased_os_system_call_is_flagged(self):
+        from qwed_mcp.engines.code_engine import verify_code_safety
+
+        result = verify_code_safety("import os as x\nx.system('ls')", "python")
+        assert result["verified"] is False
+        assert any("os.system()" in issue for issue in result["issues"])
+
+    def test_os_popen_call_is_flagged(self):
+        from qwed_mcp.engines.code_engine import verify_code_safety
+
+        result = verify_code_safety("import os\nos.popen('ls')", "python")
+        assert result["verified"] is False
+        assert any("os.popen()" in issue for issue in result["issues"])
+
+    def test_imported_popen_alias_call_is_flagged(self):
+        from qwed_mcp.engines.code_engine import verify_code_safety
+
+        result = verify_code_safety("from os import popen as op\nop('ls')", "python")
+        assert result["verified"] is False
+        assert any("os.popen()" in issue for issue in result["issues"])
+
 
 class TestSQLEngine:
     """Tests for the SQL verification engine."""
