@@ -78,6 +78,13 @@ class TestCodeEngine:
         assert result["verified"] is True
         assert len(result["issues"]) == 0
 
+    def test_open_in_comment_is_not_flagged(self):
+        from qwed_mcp.engines.code_engine import verify_code_safety
+
+        result = verify_code_safety("# remember to call open(file) later\nprint('ok')", "python")
+        assert result["verified"] is True
+        assert len(result["issues"]) == 0
+
     def test_open_call_is_flagged(self):
         from qwed_mcp.engines.code_engine import verify_code_safety
 

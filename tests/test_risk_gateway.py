@@ -40,6 +40,19 @@ def test_execute_python_code_requires_safe_verification(monkeypatch):
     assert "blocked python execution" in result["message"].lower()
 
 
+def test_execute_python_code_blocks_non_boolean_background(monkeypatch):
+    monkeypatch.setenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "true")
+    gateway = RiskBasedExecutionGateway()
+
+    result = gateway.evaluate_and_route(
+        "execute_python_code", {"code": "print('hi')", "background": "yes"}
+    )
+
+    assert result["verified"] is False
+    assert result["status"] == "BLOCKED"
+    assert result["error_code"] == "QWED-MCP-RISK-004"
+
+
 def test_execute_python_code_returns_verified_allow_when_safe(monkeypatch):
     monkeypatch.setenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "true")
     gateway = RiskBasedExecutionGateway()

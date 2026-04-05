@@ -93,10 +93,12 @@ def verify_code_safety(
 def analyze_python(code: str) -> List[str]:
     """Analyze Python code for security issues."""
     issues = []
+    ast_parsed_successfully = False
     
     # Try AST analysis
     try:
         tree = ast.parse(code)
+        ast_parsed_successfully = True
         
         for node in ast.walk(tree):
             # Check for dangerous function calls
@@ -118,13 +120,14 @@ def analyze_python(code: str) -> List[str]:
     except SyntaxError as e:
         issues.append(f"Syntax error in code: {e}")
     
-    # Pattern-based checks
-    for pattern in DANGEROUS_PYTHON_PATTERNS:
-        if pattern in code:
-            issues.append(f"Potentially dangerous pattern: {pattern}")
+    # Fall back to raw pattern checks only if AST parsing failed.
+    if not ast_parsed_successfully:
+        for pattern in DANGEROUS_PYTHON_PATTERNS:
+            if pattern in code:
+                issues.append(f"Potentially dangerous pattern: {pattern}")
 
-    if re.search(r"\bopen\s*\(", code):
-        issues.append("Potentially dangerous pattern: open()")
+        if re.search(r"\bopen\s*\(", code):
+            issues.append("Potentially dangerous pattern: open()")
     
     return list(set(issues))
 
