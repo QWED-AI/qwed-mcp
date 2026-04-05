@@ -115,3 +115,71 @@ async def test_mcp_round_trip():
         
     assert "Status: success" in status_text
     assert "mcp success" in status_text
+
+
+@pytest.mark.asyncio
+async def test_mcp_blocks_unknown_tool_before_dispatch():
+    from mcp.server import Server
+    from qwed_mcp.tools import register_tools
+
+    mock_server = MagicMock(spec=Server)
+    registered_call_tool = None
+
+    def call_tool_decorator(*args, **kwargs):
+        def decorator(func):
+            nonlocal registered_call_tool
+            registered_call_tool = func
+            return func
+        return decorator
+
+    def list_tools_decorator(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+    mock_server.call_tool = call_tool_decorator
+    mock_server.list_tools = list_tools_decorator
+
+    register_tools(mock_server)
+
+    response = await registered_call_tool("unknown_tool", {})
+
+    assert "BLOCKED" in response[0].text
+    assert "verification_id=" in response[0].text
+
+
+@pytest.mark.asyncio
+async def test_mcp_blocks_unsafe_python_before_execution(monkeypatch):
+    from mcp.server import Server
+    from qwed_mcp.tools import register_tools
+
+    monkeypatch.setenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "true")
+
+    mock_server = MagicMock(spec=Server)
+    registered_call_tool = None
+
+    def call_tool_decorator(*args, **kwargs):
+        def decorator(func):
+            nonlocal registered_call_tool
+            registered_call_tool = func
+            return func
+        return decorator
+
+    def list_tools_decorator(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+    mock_server.call_tool = call_tool_decorator
+    mock_server.list_tools = list_tools_decorator
+
+    register_tools(mock_server)
+
+    with patch("qwed_mcp.tools.execute_python_code_tool", new_callable=AsyncMock) as mock_exec:
+        response = await registered_call_tool(
+            "execute_python_code", {"code": "eval(input())"}
+        )
+
+    mock_exec.assert_not_awaited()
+    assert "BLOCKED" in response[0].text
+    assert "verification_id=" in response[0].text
