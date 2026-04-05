@@ -122,7 +122,9 @@ def _format_output(stdout: str, stderr: str, returncode: int | None) -> str:
 
 async def execute_python_code_tool(arguments: dict[str, Any]) -> tuple[bool, list[TextContent]]:
     """Execute the provided python code in a subprocess. Returns (success, TextContent)."""
-    
+
+    # Safety net: validated by RiskBasedExecutionGateway before normal dispatch.
+    # These checks remain here to fail closed if this function is ever called directly.
     trusted_mode = os.getenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "false").lower() == "true"
     if not trusted_mode:
         return False, [TextContent(type="text", text="Error: Code execution is disabled. The server admin must set QWED_MCP_TRUSTED_CODE_EXECUTION=true to enable this tool.")]
@@ -360,4 +362,16 @@ def register_tools(server: Server) -> None:
 
         # Safety net: unknown tools should already be blocked by _TOOL_POLICIES
         # via QWED-MCP-RISK-001 before dispatch reaches this point.
-        raise AssertionError(f"Unexpected tool '{name}' bypassed the governance gateway")
+        logger.error(
+            "Governance invariant violated: tool '%s' reached dispatch without verification",
+            name,
+        )
+        return [
+            TextContent(
+                type="text",
+                text=(
+                    "BLOCKED: Internal governance error. Unexpected tool bypassed "
+                    "policy QWED-MCP-RISK-001."
+                ),
+            )
+        ]

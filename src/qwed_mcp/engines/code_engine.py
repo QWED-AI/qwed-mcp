@@ -7,7 +7,7 @@ Uses AST analysis for detecting dangerous patterns.
 import ast
 import re
 import logging
-from typing import List, Optional
+from typing import List
 
 logger = logging.getLogger("qwed-mcp.engines.code")
 
@@ -17,7 +17,6 @@ DANGEROUS_PYTHON_PATTERNS = [
     "exec",
     "__import__",
     "compile",
-    "open",
     "os.system",
     "subprocess",
     "pickle.loads",
@@ -103,7 +102,7 @@ def analyze_python(code: str) -> List[str]:
             # Check for dangerous function calls
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name):
-                    if node.func.id in ["eval", "exec", "compile"]:
+                    if node.func.id in ["eval", "exec", "compile", "open"]:
                         issues.append(f"Dangerous function call: {node.func.id}()")
                         
                 elif isinstance(node.func, ast.Attribute):
@@ -123,6 +122,9 @@ def analyze_python(code: str) -> List[str]:
     for pattern in DANGEROUS_PYTHON_PATTERNS:
         if pattern in code:
             issues.append(f"Potentially dangerous pattern: {pattern}")
+
+    if re.search(r"\bopen\s*\(", code):
+        issues.append("Potentially dangerous pattern: open()")
     
     return list(set(issues))
 

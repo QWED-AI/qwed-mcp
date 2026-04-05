@@ -15,6 +15,17 @@ def test_unknown_tool_is_blocked_by_default():
     assert result["error_code"] == "QWED-MCP-RISK-001"
 
 
+def test_execute_python_code_blocks_missing_code(monkeypatch):
+    monkeypatch.setenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "true")
+    gateway = RiskBasedExecutionGateway()
+
+    result = gateway.evaluate_and_route("execute_python_code", {})
+
+    assert result["verified"] is False
+    assert result["status"] == "BLOCKED"
+    assert result["error_code"] == "QWED-MCP-RISK-003"
+
+
 def test_execute_python_code_requires_safe_verification(monkeypatch):
     monkeypatch.setenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "true")
     gateway = RiskBasedExecutionGateway()
@@ -85,6 +96,16 @@ def test_verification_status_requires_canonical_uuid():
     assert result["verified"] is True
     assert result["status"] == "ALLOW_VERIFIED"
     assert result["normalized_arguments"]["job_id"] == job_id.lower()
+
+
+def test_verification_status_blocks_missing_job_id():
+    gateway = RiskBasedExecutionGateway()
+
+    result = gateway.evaluate_and_route("verification_status", {})
+
+    assert result["verified"] is False
+    assert result["status"] == "BLOCKED"
+    assert result["error_code"] == "QWED-MCP-RISK-007"
 
 
 def test_verification_status_blocks_invalid_uuid():

@@ -71,6 +71,20 @@ class TestCodeEngine:
         assert result["verified"] is True
         assert len(result["issues"]) == 0
 
+    def test_open_in_string_is_not_flagged(self):
+        from qwed_mcp.engines.code_engine import verify_code_safety
+
+        result = verify_code_safety('message = "please open the docs"', "python")
+        assert result["verified"] is True
+        assert len(result["issues"]) == 0
+
+    def test_open_call_is_flagged(self):
+        from qwed_mcp.engines.code_engine import verify_code_safety
+
+        result = verify_code_safety("with open('file.txt') as f:\n    print(f.read())", "python")
+        assert result["verified"] is False
+        assert any("open" in issue for issue in result["issues"])
+
 
 class TestSQLEngine:
     """Tests for the SQL verification engine."""
