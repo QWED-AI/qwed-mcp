@@ -11,6 +11,13 @@ from typing import List
 
 logger = logging.getLogger("qwed-mcp.engines.code")
 
+_DANGEROUS_IMPORT_MODULES = {"subprocess"}
+_DANGEROUS_IMPORTED_MEMBERS = {
+    ("os", "system"),
+    ("pickle", "loads"),
+    ("marshal", "loads"),
+}
+
 # Dangerous patterns for Python
 DANGEROUS_PYTHON_PATTERNS = [
     "eval",
@@ -101,6 +108,34 @@ def analyze_python(code: str) -> List[str]:
         ast_parsed_successfully = True
         
         for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported_name = alias.name
+                    if any(
+                        imported_name == module
+                        or imported_name.startswith(f"{module}.")
+                        for module in _DANGEROUS_IMPORT_MODULES
+                    ):
+                        issues.append(
+                            f"Dangerous import detected: {imported_name}"
+                        )
+
+            if isinstance(node, ast.ImportFrom):
+                module_name = node.module or ""
+                if any(
+                    module_name == module
+                    or module_name.startswith(f"{module}.")
+                    for module in _DANGEROUS_IMPORT_MODULES
+                ):
+                    issues.append(
+                        f"Dangerous import detected: from {module_name} import ..."
+                    )
+                for alias in node.names:
+                    if (module_name, alias.name) in _DANGEROUS_IMPORTED_MEMBERS:
+                        issues.append(
+                            f"Dangerous import detected: from {module_name} import {alias.name}"
+                        )
+
             # Check for dangerous function calls
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name):

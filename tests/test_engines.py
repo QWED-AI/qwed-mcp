@@ -92,6 +92,20 @@ class TestCodeEngine:
         assert result["verified"] is False
         assert any("open" in issue for issue in result["issues"])
 
+    def test_subprocess_import_is_flagged(self):
+        from qwed_mcp.engines.code_engine import verify_code_safety
+
+        result = verify_code_safety("import subprocess\nprint('ok')", "python")
+        assert result["verified"] is False
+        assert any("subprocess" in issue for issue in result["issues"])
+
+    def test_dangerous_import_from_is_flagged(self):
+        from qwed_mcp.engines.code_engine import verify_code_safety
+
+        result = verify_code_safety("from os import system\nprint('ok')", "python")
+        assert result["verified"] is False
+        assert any("from os import system" in issue for issue in result["issues"])
+
 
 class TestSQLEngine:
     """Tests for the SQL verification engine."""
