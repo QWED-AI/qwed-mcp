@@ -11,6 +11,11 @@ from typing import Any, Dict
 
 from qwed_mcp.engines.code_engine import verify_code_safety
 
+# Generated once at import time — all gateway instances within the same
+# process share this identity.  A new process (restart / new container)
+# gets a fresh ID automatically.
+_SERVER_INSTANCE_ID: str = uuid.uuid4().hex
+
 
 class RiskBasedExecutionGateway:
     """Wrap MCP tool execution with QWED-aligned verification and policy checks.
@@ -22,7 +27,7 @@ class RiskBasedExecutionGateway:
     """
 
     def __init__(self) -> None:
-        self._server_instance_id: str = uuid.uuid4().hex
+        self._server_instance_id: str = _SERVER_INSTANCE_ID
 
     _TOOL_POLICIES: Dict[str, Dict[str, Any]] = {
         "execute_python_code": {

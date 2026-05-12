@@ -150,8 +150,8 @@ def test_identical_requests_produce_unique_verification_ids(monkeypatch):
     )
 
 
-def test_different_gateway_instances_produce_unique_ids(monkeypatch):
-    """Different server instances must never share verification_ids (Issue #11)."""
+def test_same_process_gateways_share_instance_id_but_produce_unique_ids(monkeypatch):
+    """Same-process gateway instances share server identity but still produce unique IDs (Issue #11)."""
     monkeypatch.setenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "true")
     gateway_a = RiskBasedExecutionGateway()
     gateway_b = RiskBasedExecutionGateway()
@@ -163,10 +163,10 @@ def test_different_gateway_instances_produce_unique_ids(monkeypatch):
         "execute_python_code", {"code": "print('test')"}
     )
 
+    # Verification IDs are unique due to per-request nonce + timestamp
     assert result_a["verification_id"] != result_b["verification_id"], (
-        "Different gateway instances must produce unique verification_ids"
+        "Same-process gateway instances must still produce unique verification_ids"
     )
-    assert gateway_a._server_instance_id != gateway_b._server_instance_id
 
 
 def test_blocked_responses_also_have_unique_verification_ids():
