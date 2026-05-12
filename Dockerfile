@@ -1,22 +1,22 @@
 
-# Use Ubuntu 24.04 to bypass Debian 12 Zlib vulnerabilities while keeping glibc for fast z3-solver wheel installations
-FROM ubuntu:24.04 AS builder
+# Pin base image to specific digest for reproducible builds (ubuntu:24.04 noble-20260410)
+FROM ubuntu:24.04@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff AS builder
 
 WORKDIR /app
 
-# Install Python 3.14 from Deadsnakes PPA to satisfy the 3.14 requirement on a safe OS
+# Install Python 3.14 from Deadsnakes PPA on a safe OS (bypasses Debian 12 zlib CVEs).
+# curl is needed for builder stage only; no pipe-to-shell — uv is COPY'd from official image.
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common curl build-essential && \
+    software-properties-common build-essential && \
     add-apt-repository ppa:deadsnakes/ppa -y && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     python3.14 python3.14-venv && \
     rm -rf /var/lib/apt/lists/*
 
-# Install uv for fast package management
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
+# Copy uv binary from official image — avoids pipe-to-shell (QWED shell_safety)
+COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /usr/local/bin/uv
 
 RUN uv venv --python 3.14 /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
@@ -31,8 +31,8 @@ COPY README.md .
 COPY src/ src/
 RUN uv pip install .
 
-# Runtime stage
-FROM ubuntu:24.04
+# Runtime stage — pinned to same digest as builder
+FROM ubuntu:24.04@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff
 
 WORKDIR /app
 
