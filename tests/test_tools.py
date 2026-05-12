@@ -152,10 +152,6 @@ async def test_mcp_blocks_unsafe_python_before_execution(
     assert "verification_id=" in response[0].text
 
 
-# ─────────────────────────────────────────────────────────────────────
-# Issue #10: Background worker timeout enforcement
-# ─────────────────────────────────────────────────────────────────────
-
 @pytest.mark.asyncio
 async def test_background_worker_timeout_enforced():
     """Background job running beyond timeout must be marked timed_out, not left running."""
@@ -208,4 +204,16 @@ def test_get_background_timeout_rejects_negative():
 def test_get_background_timeout_rejects_garbage():
     """Non-numeric values fall back to default."""
     with patch.dict(os.environ, {"QWED_MCP_BACKGROUND_TIMEOUT": "not_a_number"}):
+        assert _get_background_timeout() == _DEFAULT_BACKGROUND_TIMEOUT
+
+
+def test_get_background_timeout_rejects_nan():
+    """NaN must be rejected to prevent event loop crashes (Codex review)."""
+    with patch.dict(os.environ, {"QWED_MCP_BACKGROUND_TIMEOUT": "nan"}):
+        assert _get_background_timeout() == _DEFAULT_BACKGROUND_TIMEOUT
+
+
+def test_get_background_timeout_rejects_inf():
+    """Infinity must be rejected as a non-finite value."""
+    with patch.dict(os.environ, {"QWED_MCP_BACKGROUND_TIMEOUT": "inf"}):
         assert _get_background_timeout() == _DEFAULT_BACKGROUND_TIMEOUT
