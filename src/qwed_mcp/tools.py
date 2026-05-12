@@ -10,6 +10,7 @@ import os
 import sys
 import anyio
 import asyncio
+import math
 import uuid
 import time
 import tempfile
@@ -192,19 +193,56 @@ async def execute_python_code_tool(arguments: dict[str, Any]) -> tuple[bool, lis
         return success, [TextContent(type="text", text=final_output)]
         
     except Exception as e:
-        logger.error(f"Error executing code: {e}")
+        logger.exception("Error executing code")
         if 'script_path_obj' in locals():
             await _cleanup_script(script_path_obj)
         return False, [TextContent(type="text", text=f"Execution error: {str(e)}")]
+
+# Hard upper bound for background execution timeout (seconds).
+# Configurable via QWED_MCP_BACKGROUND_TIMEOUT but never exceeds this ceiling.
+_MAX_BACKGROUND_TIMEOUT_CEILING: float = 600.0
+_DEFAULT_BACKGROUND_TIMEOUT: float = 120.0
+
+
+def _get_background_timeout() -> float:
+    """Return the background worker timeout in seconds.
+
+    Reads QWED_MCP_BACKGROUND_TIMEOUT from the environment.  Values above
+    the hard ceiling are clamped; non-numeric or non-positive values fall
+    back to the default.
+    """
+    raw = os.getenv("QWED_MCP_BACKGROUND_TIMEOUT", "")
+    if raw:
+        try:
+            value = float(raw)
+            if not math.isfinite(value) or value <= 0:
+                logger.warning(
+                    "QWED_MCP_BACKGROUND_TIMEOUT must be a positive finite number, using default %.0fs",
+                    _DEFAULT_BACKGROUND_TIMEOUT,
+                )
+                return _DEFAULT_BACKGROUND_TIMEOUT
+            return min(value, _MAX_BACKGROUND_TIMEOUT_CEILING)
+        except ValueError:
+            logger.warning(
+                "Invalid QWED_MCP_BACKGROUND_TIMEOUT '%s', using default %.0fs",
+                raw,
+                _DEFAULT_BACKGROUND_TIMEOUT,
+            )
+    return _DEFAULT_BACKGROUND_TIMEOUT
+
 
 class AsyncMCPHandler:
     """
     Implements async job queues to avoid blocking on long-running MCP tool calls.
     Allows LLM clients to dispatch heavy tasks and poll them using the 'verification_status' tool.
+
+    Background workers enforce a hard execution timeout (default 120s, max 600s)
+    to prevent denial-of-service via unbounded execution.  See: Issue #10.
     """
     def __init__(self, max_concurrent_jobs: int = 5):
         self.pending_verifications: dict[str, dict[str, Any]] = {}
         self.semaphore = asyncio.Semaphore(max_concurrent_jobs)
+        self.background_timeout: float = _get_background_timeout()
 
     def _prune_pending_verifications(self, ttl_seconds: float = 3600.0) -> None:
         """Removes pending verifications older than TTL to prevent memory leaks."""
@@ -219,35 +257,53 @@ class AsyncMCPHandler:
         for k in expired_keys:
             del self.pending_verifications[k]
 
+    def _update_job(self, job_id: str, status: str, result: str, **extra: Any) -> None:
+        """Update a pending job's status, result, and timestamp in one place."""
+        if job_id in self.pending_verifications:
+            self.pending_verifications[job_id]["status"] = status
+            self.pending_verifications[job_id]["result"] = result
+            self.pending_verifications[job_id]["last_updated_at"] = time.time()
+            for key, val in extra.items():
+                self.pending_verifications[job_id][key] = val
+
     async def _worker(self, job_id: str, arguments: dict[str, Any]):
         try:
             async with self.semaphore:
                 if job_id in self.pending_verifications:
                     self.pending_verifications[job_id]["status"] = "running"
                     self.pending_verifications[job_id]["last_updated_at"] = time.time()
-                    
-                # Execute without timeout for background verification
-                success, result_list = await execute_python_code_tool(arguments)
-                
-                if job_id in self.pending_verifications:
-                    self.pending_verifications[job_id]["status"] = "success" if success else "failed"
-                    self.pending_verifications[job_id]["last_updated_at"] = time.time()
-                    if result_list and len(result_list) > 0:
-                        self.pending_verifications[job_id]["result"] = result_list[0].text
-                    else:
-                        self.pending_verifications[job_id]["result"] = "No output"
+
+                try:
+                    success, result_list = await asyncio.wait_for(
+                        execute_python_code_tool(arguments),
+                        timeout=self.background_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Background job %s timed out after %.0fs",
+                        job_id,
+                        self.background_timeout,
+                    )
+                    self._update_job(
+                        job_id,
+                        "timed_out",
+                        f"Background verification timed out after "
+                        f"{self.background_timeout:.0f} seconds. "
+                        f"Process terminated to prevent resource exhaustion.",
+                    )
+                    return
+
+                result_text = result_list[0].text if result_list else "No output"
+                self._update_job(
+                    job_id,
+                    "success" if success else "failed",
+                    result_text,
+                )
         except asyncio.CancelledError:
-            if job_id in self.pending_verifications:
-                self.pending_verifications[job_id]["status"] = "cancelled"
-                self.pending_verifications[job_id]["result"] = "Job was cancelled."
-                self.pending_verifications[job_id]["last_updated_at"] = time.time()
+            self._update_job(job_id, "cancelled", "Job was cancelled.")
             raise
         except Exception as e:
-            if job_id in self.pending_verifications:
-                self.pending_verifications[job_id]["status"] = "failed"
-                self.pending_verifications[job_id]["error"] = str(e)
-                self.pending_verifications[job_id]["last_updated_at"] = time.time()
-                self.pending_verifications[job_id]["result"] = str(e)
+            self._update_job(job_id, "failed", str(e), error=str(e))
 
     def dispatch_background_worker(self, arguments: dict[str, Any]) -> str:
         self._prune_pending_verifications()
@@ -266,7 +322,7 @@ class AsyncMCPHandler:
     def get_status(self, job_id: str) -> str:
         if job_id in self.pending_verifications:
             job = self.pending_verifications[job_id]
-            if job["status"] in ["success", "failed", "cancelled"]:
+            if job["status"] in ["success", "failed", "cancelled", "timed_out"]:
                 result_str = f"Status: {job['status']}\n\nResult:\n{job['result']}"
                 self._prune_pending_verifications()
                 return result_str
@@ -278,7 +334,7 @@ class AsyncMCPHandler:
         
         job = self.pending_verifications[job_id]
         
-        if job["status"] in ["success", "failed", "cancelled"]:
+        if job["status"] in ["success", "failed", "cancelled", "timed_out"]:
             return f"Status: {job['status']}\n\nResult:\n{job['result']}"
         else:
             return f"Status: {job['status']}..."
