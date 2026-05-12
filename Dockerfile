@@ -38,7 +38,11 @@ WORKDIR /app
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Python 3.14 runtime on pristine Ubuntu 24.04 and log packages
+# Install Python 3.14 runtime on pristine Ubuntu 24.04.
+# software-properties-common is needed only for add-apt-repository; purge it
+# afterwards to remove transitive system python3-cryptography (41.0.7) and
+# python3-jwt (2.7.0) that Docker Scout flags as vulnerable.
+# Our app uses venv-installed cryptography>=48.0.0 and PyJWT>=2.12.0.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common && \
     add-apt-repository ppa:deadsnakes/ppa -y && \
@@ -46,6 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-get install -y --no-install-recommends \
     python3.14 && \
     dpkg-query -W -f='${Package} ${Version}\n' > /var/log/apt-upgraded-packages.txt && \
+    apt-get purge -y --auto-remove software-properties-common && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv
