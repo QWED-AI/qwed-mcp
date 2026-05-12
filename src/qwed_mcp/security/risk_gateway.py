@@ -5,14 +5,29 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 import uuid
 from typing import Any, Dict
 
 from qwed_mcp.engines.code_engine import verify_code_safety
 
+# Generated once at import time — all gateway instances within the same
+# process share this identity.  A new process (restart / new container)
+# gets a fresh ID automatically.
+_SERVER_INSTANCE_ID: str = uuid.uuid4().hex
+
 
 class RiskBasedExecutionGateway:
-    """Wrap MCP tool execution with QWED-aligned verification and policy checks."""
+    """Wrap MCP tool execution with QWED-aligned verification and policy checks.
+
+    Each verification decision is context-bound: verification IDs include a
+    random nonce, wall-clock timestamp, and a per-process server instance ID
+    so that identical requests never produce the same verification_id.  This
+    prevents replay attacks and stale-cache correlation.  See: Issue #11.
+    """
+
+    def __init__(self) -> None:
+        self._server_instance_id: str = _SERVER_INSTANCE_ID
 
     _TOOL_POLICIES: Dict[str, Dict[str, Any]] = {
         "execute_python_code": {
@@ -170,11 +185,22 @@ class RiskBasedExecutionGateway:
             "message": "Verification status lookup passed deterministic validation.",
         }
 
-    @staticmethod
-    def _build_verification_id(tool_name: str, arguments: dict[str, Any]) -> str:
-        """Create a deterministic verification fingerprint for a tool request."""
+    def _build_verification_id(self, tool_name: str, arguments: dict[str, Any]) -> str:
+        """Create a context-bound, non-replayable verification fingerprint.
+
+        The hash includes tool_name + arguments (for deterministic content
+        binding) **plus** a random nonce, wall-clock timestamp, and the
+        server instance ID so that identical requests always produce
+        distinct verification IDs.  (Issue #11)
+        """
         payload = json.dumps(
-            {"tool_name": tool_name, "arguments": arguments},
+            {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "nonce": uuid.uuid4().hex,
+                "timestamp": time.time(),
+                "server_instance_id": self._server_instance_id,
+            },
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
