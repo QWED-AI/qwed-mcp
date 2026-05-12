@@ -2,7 +2,13 @@ import os
 import pytest
 import asyncio
 from unittest.mock import patch, AsyncMock, MagicMock
-from qwed_mcp.tools import execute_python_code_tool, AsyncMCPHandler
+from qwed_mcp.tools import (
+    execute_python_code_tool,
+    AsyncMCPHandler,
+    _get_background_timeout,
+    _DEFAULT_BACKGROUND_TIMEOUT,
+    _MAX_BACKGROUND_TIMEOUT_CEILING,
+)
 
 import pytest_asyncio
 
@@ -73,7 +79,7 @@ async def _wait_for_job(async_handler: AsyncMCPHandler, job_id: str, poll_interv
     """Poll until job completes."""
     while True:
         status = async_handler.get_status(job_id)
-        if "Status: success" in status or "Status: failed" in status or "Status: cancelled" in status:
+        if any(s in status for s in ["Status: success", "Status: failed", "Status: cancelled", "Status: timed_out"]):
             return status
         await asyncio.sleep(poll_interval)
 
@@ -144,3 +150,62 @@ async def test_mcp_blocks_unsafe_python_before_execution(
     mock_exec.assert_not_awaited()
     assert "BLOCKED" in response[0].text
     assert "verification_id=" in response[0].text
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Issue #10: Background worker timeout enforcement
+# ─────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_background_worker_timeout_enforced():
+    """Background job running beyond timeout must be marked timed_out, not left running."""
+    handler = AsyncMCPHandler(max_concurrent_jobs=2)
+    handler.background_timeout = 1.0  # 1 second for test speed
+
+    # Code that sleeps longer than the timeout
+    job_id = handler.dispatch_background_worker({"code": "import time; time.sleep(30)"})
+    status = await asyncio.wait_for(_wait_for_job(handler, job_id), timeout=10.0)
+
+    assert "Status: timed_out" in status
+    assert "timed out" in status.lower()
+    assert "resource exhaustion" in status.lower()
+
+
+@pytest.mark.asyncio
+async def test_background_timeout_does_not_block_fast_jobs():
+    """Jobs completing within the timeout should succeed normally."""
+    handler = AsyncMCPHandler(max_concurrent_jobs=2)
+    handler.background_timeout = 30.0
+
+    job_id = handler.dispatch_background_worker({"code": "print('fast job')"})
+    status = await asyncio.wait_for(_wait_for_job(handler, job_id), timeout=10.0)
+
+    assert "Status: success" in status
+    assert "fast job" in status
+
+
+def test_get_background_timeout_defaults():
+    """Default timeout is applied when env var is unset."""
+    with patch.dict(os.environ, {}, clear=True):
+        # Remove the key if it exists
+        os.environ.pop("QWED_MCP_BACKGROUND_TIMEOUT", None)
+        assert _get_background_timeout() == _DEFAULT_BACKGROUND_TIMEOUT
+
+
+def test_get_background_timeout_clamped_to_ceiling():
+    """Values above the hard ceiling are clamped."""
+    with patch.dict(os.environ, {"QWED_MCP_BACKGROUND_TIMEOUT": "9999"}):
+        result = _get_background_timeout()
+        assert result == _MAX_BACKGROUND_TIMEOUT_CEILING
+
+
+def test_get_background_timeout_rejects_negative():
+    """Negative or zero values fall back to default."""
+    with patch.dict(os.environ, {"QWED_MCP_BACKGROUND_TIMEOUT": "-5"}):
+        assert _get_background_timeout() == _DEFAULT_BACKGROUND_TIMEOUT
+
+
+def test_get_background_timeout_rejects_garbage():
+    """Non-numeric values fall back to default."""
+    with patch.dict(os.environ, {"QWED_MCP_BACKGROUND_TIMEOUT": "not_a_number"}):
+        assert _get_background_timeout() == _DEFAULT_BACKGROUND_TIMEOUT
