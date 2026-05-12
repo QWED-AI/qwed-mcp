@@ -131,3 +131,51 @@ def test_verification_status_blocks_invalid_uuid():
     assert result["verified"] is False
     assert result["status"] == "BLOCKED"
     assert result["error_code"] == "QWED-MCP-RISK-008"
+
+
+def test_identical_requests_produce_unique_verification_ids(monkeypatch):
+    """Two identical requests must never share a verification_id (Issue #11)."""
+    monkeypatch.setenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "true")
+    gateway = RiskBasedExecutionGateway()
+
+    result_a = gateway.evaluate_and_route(
+        "execute_python_code", {"code": "print('hello')"}
+    )
+    result_b = gateway.evaluate_and_route(
+        "execute_python_code", {"code": "print('hello')"}
+    )
+
+    assert result_a["verification_id"] != result_b["verification_id"], (
+        "Identical requests must produce unique verification_ids to prevent replay"
+    )
+
+
+def test_different_gateway_instances_produce_unique_ids(monkeypatch):
+    """Different server instances must never share verification_ids (Issue #11)."""
+    monkeypatch.setenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "true")
+    gateway_a = RiskBasedExecutionGateway()
+    gateway_b = RiskBasedExecutionGateway()
+
+    result_a = gateway_a.evaluate_and_route(
+        "execute_python_code", {"code": "print('test')"}
+    )
+    result_b = gateway_b.evaluate_and_route(
+        "execute_python_code", {"code": "print('test')"}
+    )
+
+    assert result_a["verification_id"] != result_b["verification_id"], (
+        "Different gateway instances must produce unique verification_ids"
+    )
+    assert gateway_a._server_instance_id != gateway_b._server_instance_id
+
+
+def test_blocked_responses_also_have_unique_verification_ids():
+    """Even BLOCKED decisions must have context-bound verification_ids (Issue #11)."""
+    gateway = RiskBasedExecutionGateway()
+
+    result_a = gateway.evaluate_and_route("unknown_tool_a", {})
+    result_b = gateway.evaluate_and_route("unknown_tool_a", {})
+
+    assert "verification_id" in result_a
+    assert "verification_id" in result_b
+    assert result_a["verification_id"] != result_b["verification_id"]
