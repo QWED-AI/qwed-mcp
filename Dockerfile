@@ -1,44 +1,50 @@
 
-# Use Ubuntu 24.04 to bypass Debian 12 Zlib vulnerabilities while keeping glibc for fast z3-solver wheel installations
-FROM ubuntu:24.04 AS builder
+# ubuntu:24.04 (noble-20260410)
+FROM ubuntu@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff AS builder
 
 WORKDIR /app
 
-# Install Python 3.14 from Deadsnakes PPA to satisfy the 3.14 requirement on a safe OS
+# Install Python 3.14 from Deadsnakes PPA on a safe OS (bypasses Debian 12 zlib CVEs).
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common curl build-essential && \
+    software-properties-common build-essential && \
     add-apt-repository ppa:deadsnakes/ppa -y && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     python3.14 python3.14-venv && \
     rm -rf /var/lib/apt/lists/*
 
-# Install uv for fast package management
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
+# Copy uv binary from official image — avoids pipe-to-shell (QWED shell_safety)
+COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /usr/local/bin/uv
 
 RUN uv venv --python 3.14 /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install wheel patches into the venv
-RUN uv pip install "uv>=0.5.1" "wheel>=0.46.2" "setuptools>=78.1.1"
-
+# Copy manifests first for cache-friendly dependency layer
 COPY pyproject.toml .
+COPY uv.lock .
 COPY README.md .
 
-COPY src/ src/
-RUN uv pip install .
+# Install locked dependencies first (no project sources yet) — maximises cache reuse
+RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev --no-install-project
 
-# Runtime stage
-FROM ubuntu:24.04
+# Now copy source and install the project itself
+COPY src/ src/
+RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev
+
+# ubuntu:24.04 (noble-20260410) — same digest as builder
+FROM ubuntu@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff
 
 WORKDIR /app
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Python 3.14 runtime on pristine Ubuntu 24.04 and log packages
+# Install Python 3.14 runtime on pristine Ubuntu 24.04.
+# software-properties-common is needed only for add-apt-repository; purge it
+# afterwards to remove transitive system python3-cryptography (41.0.7) and
+# python3-jwt (2.7.0) that Docker Scout flags as vulnerable.
+# Our app uses venv-installed cryptography>=48.0.0 and PyJWT>=2.12.0.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common && \
     add-apt-repository ppa:deadsnakes/ppa -y && \
@@ -46,6 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-get install -y --no-install-recommends \
     python3.14 && \
     dpkg-query -W -f='${Package} ${Version}\n' > /var/log/apt-upgraded-packages.txt && \
+    apt-get purge -y --auto-remove software-properties-common && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv
