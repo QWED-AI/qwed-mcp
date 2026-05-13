@@ -1,11 +1,11 @@
 
-# Pin base image to specific digest for reproducible builds (ubuntu:24.04 noble-20260410)
-FROM ubuntu:24.04@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff AS builder
+# ubuntu:24.04 (noble-20260410)
+FROM ubuntu@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff AS builder
 
 WORKDIR /app
 
 # Install Python 3.14 from Deadsnakes PPA on a safe OS (bypasses Debian 12 zlib CVEs).
-# curl is needed for builder stage only; no pipe-to-shell — uv is COPY'd from official image.
+# No pipe-to-shell — uv binary is COPY'd from the official image below.
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common build-essential && \
@@ -22,17 +22,19 @@ RUN uv venv --python 3.14 /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install wheel patches into the venv
-RUN uv pip install "uv>=0.5.1" "wheel>=0.46.2" "setuptools>=78.1.1"
+# Install build tools into the venv
+RUN uv pip install "wheel>=0.46.2" "setuptools>=78.1.1"
 
 COPY pyproject.toml .
+COPY uv.lock .
 COPY README.md .
-
 COPY src/ src/
-RUN uv pip install .
 
-# Runtime stage — pinned to same digest as builder
-FROM ubuntu:24.04@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff
+# Use --locked to enforce deterministic installs from uv.lock
+RUN uv sync --locked --no-dev
+
+# ubuntu:24.04 (noble-20260410) — same digest as builder
+FROM ubuntu@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff
 
 WORKDIR /app
 
