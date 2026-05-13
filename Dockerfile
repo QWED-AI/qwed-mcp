@@ -5,7 +5,6 @@ FROM ubuntu@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5
 WORKDIR /app
 
 # Install Python 3.14 from Deadsnakes PPA on a safe OS (bypasses Debian 12 zlib CVEs).
-# No pipe-to-shell — uv binary is COPY'd from the official image below.
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common build-essential && \
@@ -22,16 +21,17 @@ RUN uv venv --python 3.14 /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install build tools into the venv
-RUN uv pip install "wheel>=0.46.2" "setuptools>=78.1.1"
-
+# Copy manifests first for cache-friendly dependency layer
 COPY pyproject.toml .
 COPY uv.lock .
 COPY README.md .
-COPY src/ src/
 
-# Use --locked to enforce deterministic installs from uv.lock
-RUN uv sync --locked --no-dev
+# Install locked dependencies first (no project sources yet) — maximises cache reuse
+RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev --no-install-project
+
+# Now copy source and install the project itself
+COPY src/ src/
+RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev
 
 # ubuntu:24.04 (noble-20260410) — same digest as builder
 FROM ubuntu@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff
