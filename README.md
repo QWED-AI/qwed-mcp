@@ -79,7 +79,7 @@ Ask Claude:
 
 ## ⚠️ Migration Note: Deprecation of `verify_*` Tools
 
-To solve "context bloat" and align with the new MCP standard (RFC-9728), all 1:1 functional tools (e.g., `verify_math`, `verify_sql`, `verify_code`) **have been removed** as of `v0.2.0`. 
+To solve "context bloat" and align with the new MCP standard (RFC-9728), all 1:1 functional tools (e.g., `verify_math`, `verify_sql`, `verify_code`) **have been removed** as of `v0.2.1`. 
 
 They have been replaced with a single, highly capable tool:
 **👉 `execute_python_code`** 
@@ -256,7 +256,7 @@ Yes! The server is extensible. Fork it and add your custom `@mcp.tool()` functio
 
 ## 🗺️ Roadmap
 
-### ✅ Released (v0.2.0)
+### ✅ Released (v0.2.1)
 - [x] Context bloat resolution (RFC-9728 compatibility)
 - [x] Unified `execute_python_code` environment
 - [x] Secure process isolation (env-restricted) and robust timeouts
