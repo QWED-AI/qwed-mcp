@@ -7,28 +7,34 @@ replacement for proper security review.
 """
 
 import ast
-import re
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = REPO_ROOT / "src"
 
-# Files that are intentionally exempt because they ARE the approved boundary
-APPROVED_WRAPPER_FILES = {
-    "safe_parser.py",
+# Approved wrapper paths (relative to repo root)
+APPROVED_WRAPPER_PATHS = {
+    "src/qwed_mcp/engines/safe_parser.py",
+}
+
+# Full call names that are forbidden outside approved wrappers (dotted names)
+FORBIDDEN_CALLS = {
+    "os.system",
+    "os.popen",
+    "subprocess.Popen",
+    "subprocess.call",
+    "subprocess.run",
+    "subprocess.check_call",
+    "subprocess.check_output",
+    "popen",
 }
 
 
 def get_call_names(node: ast.Call) -> list[str]:
-    """Extract full dotted call name(s) from a Call node."""
     names = []
-
-    # Direct call: eval(...)
     if isinstance(node.func, ast.Name):
         names.append(node.func.id)
-
-    # Attribute call: os.system(...)
     elif isinstance(node.func, ast.Attribute):
         parts = []
         current = node.func
@@ -40,7 +46,6 @@ def get_call_names(node: ast.Call) -> list[str]:
         elif isinstance(current, ast.Call):
             return names
         names.append(".".join(reversed(parts)))
-
     return names
 
 
@@ -48,31 +53,47 @@ def check_file(filepath: Path) -> list[str]:
     errors = []
     try:
         tree = ast.parse(filepath.read_text(encoding="utf-8"))
-    except SyntaxError:
+    except SyntaxError as exc:
+        errors.append(
+            f"  [PARSE_ERROR] {filepath.relative_to(REPO_ROOT)}:{exc.lineno}: "
+            "File could not be parsed; boundary check must fail closed"
+        )
         return errors
 
-    filename = filepath.name
+    relpath = filepath.relative_to(REPO_ROOT).as_posix()
+    in_wrapper = relpath in APPROVED_WRAPPER_PATHS
 
     for node in ast.walk(tree):
-        # Only flag actual Call nodes, not string literals in sets/lists
         if not isinstance(node, ast.Call):
             continue
 
         call_names = get_call_names(node)
+        if not call_names:
+            continue
 
-        # Check for bare parse_expr (not inside the approved wrapper)
-        if "parse_expr" in call_names and filename not in APPROVED_WRAPPER_FILES:
-            errors.append(
-                f"  [BARE_PARSE_EXPR] {filepath.relative_to(REPO_ROOT)}:{node.lineno}: "
-                f"Use safe_parse_expr() instead of bare parse_expr()"
-            )
-
-        # Check for bare eval/exec calls (not string definitions)
         for name in call_names:
-            if name in {"eval", "exec"}:
+            leaf = name.split(".")[-1]
+
+            # bare eval/exec → always dangerous
+            if leaf in {"eval", "exec"} and not in_wrapper:
+                if "." not in name or name.startswith("builtins."):
+                    errors.append(
+                        f"  [BARE_EVAL] {relpath}:{node.lineno}: "
+                        f"Disallowed call '{name}()' \u2014 use approved wrappers"
+                    )
+
+            # parse_expr: flag both bare and qualified (sympy.parse_expr etc.)
+            if leaf == "parse_expr" and not in_wrapper:
                 errors.append(
-                    f"  [BARE_EVAL] {filepath.relative_to(REPO_ROOT)}:{node.lineno}: "
-                    f"Call to '{name}()' is not allowed — use approved wrappers"
+                    f"  [BARE_PARSE_EXPR] {relpath}:{node.lineno}: "
+                    f"Disallowed call '{name}()' \u2014 use approved wrappers"
+                )
+
+            # os.system, subprocess.*, popen, system, spawn
+            if name in FORBIDDEN_CALLS and not in_wrapper:
+                errors.append(
+                    f"  [BARE_SHELL] {relpath}:{node.lineno}: "
+                    f"Disallowed call '{name}()' \u2014 use safe_shell() or approved wrapper"
                 )
 
     return errors
