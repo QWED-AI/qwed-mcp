@@ -1,0 +1,40 @@
+language: en-US
+reviews:
+  instructions: |
+    Follow QWED_RULES.md strictly.
+
+    QWED is a deterministic verification and enforcement boundary, not a
+    conventional application. Do not suggest changes that weaken enforcement in
+    exchange for convenience, usability, or availability.
+
+    Reject suggestions that introduce or recommend:
+    - fallback execution
+    - graceful degradation past failed verification
+    - raw eval/exec as backup behavior
+    - user-configurable security guards
+    - retries or auto-correction that bypass verification
+    - trust in model output as proof
+    - trust scoring, heuristics, or probabilistic approval
+    - bare parse_expr() outside the approved safe_parse_expr wrapper
+
+    Prefer fail-closed behavior and default-deny handling.
+  auto_review:
+    enabled: true
+  path_instructions:
+    - path: "**/*.py"
+      instructions: |
+        You are a security auditor for QWED-MCP (Deterministic AI Verification
+        for MCP servers).
+
+        Follow QWED_RULES.md strictly.
+
+        CRITICAL RULES:
+        1. NO FALLBACK EXECUTION: Reject any try→fail→degrade patterns.
+        2. NO BARE eval/exec: All evaluation must go through approved wrappers.
+        3. SESSION ISOLATION: Background job results must be bound to the
+           originating session.
+        4. AUDIT TRAIL: Verification decisions must be persistently recorded.
+        5. FILE ACCESS: open() must be path-restricted, not blanket-blocked.
+        6. CODE ENGINE: AST analysis must cover io.open, pathlib, and other
+           open() bypasses.
+        7. DEFAULT DENY: Unknown tools, inputs, and flows must be blocked.

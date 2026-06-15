@@ -75,3 +75,19 @@ jobs:
       - name: Lint with Ruff
         run: |
           ruff check src/ || echo "Lint check failed (non-blocking)"
+
+  boundary:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: QWED Boundary Check
+        run: |
+          python scripts/check_boundary.py

@@ -16,7 +16,8 @@ jobs:
   build-and-scan:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
+      actions: read
       packages: write
       security-events: write
       pull-requests: write
