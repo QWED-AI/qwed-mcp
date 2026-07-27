@@ -26,7 +26,7 @@ jobs:
       # credential availability once at job level (secrets are not usable
       # directly in step `if` conditions) so secret-dependent steps can be
       # skipped explicitly instead of hard-failing the whole job.
-      DOCKERHUB_AUTH_AVAILABLE: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+      DOCKERHUB_AUTH_AVAILABLE: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
       SNYK_AUTH_AVAILABLE: ${{ secrets.SNYK_TOKEN != '' }}
 
     steps:
@@ -87,7 +87,9 @@ jobs:
         continue-on-error: true
 
       - name: Snyk Container Monitor
-        uses: snyk/actions/docker@master
+        # Pinned to SHA (master @ 8e119fb) — supply-chain boundary: actions
+        # pinned to branches are mutable references.
+        uses: snyk/actions/docker@8e119fbb6c251787721d34ba683ed48eba792766
         if: env.SNYK_AUTH_AVAILABLE == 'true'
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
@@ -103,8 +105,8 @@ jobs:
           sarif_file: snyk.sarif
 
       - name: Push to Docker Hub
-        # Only push if Snyk passes and it's not a PR
-        if: github.event_name != 'pull_request'
+        # Only push if Docker Hub login succeeded and it's not a PR
+        if: github.event_name != 'pull_request' && env.DOCKERHUB_AUTH_AVAILABLE == 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
