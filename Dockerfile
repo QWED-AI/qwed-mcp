@@ -25,6 +25,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY pyproject.toml .
 COPY uv.lock .
 COPY README.md .
+COPY LICENSE .
 
 # Install locked dependencies first (binary only, no third-party build scripts)
 RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev --no-install-project --no-build
@@ -74,6 +75,6 @@ RUN useradd -m qweduser
 USER qweduser
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD pgrep -f "^qwed-mcp" > /dev/null 2>&1 || exit 1
+  CMD kill -0 1 || exit 1
 
 ENTRYPOINT ["qwed-mcp"]
