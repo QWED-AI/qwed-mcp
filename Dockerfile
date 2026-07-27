@@ -26,12 +26,21 @@ COPY pyproject.toml .
 COPY uv.lock .
 COPY README.md .
 
-# Install locked dependencies first (no project sources yet) — maximises cache reuse
-RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev --no-install-project
+# Install locked dependencies first (binary only, no third-party build scripts)
+RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev --no-install-project --no-build
 
-# Now copy source and install the project itself
+# Copy source, build wheel, and install with hash verification and no-deps
+# (deps already installed above; --no-deps avoids require-hashes checking transitive deps)
 COPY src/ src/
-RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev
+RUN <<EOF
+uv build --wheel
+WHEEL="$(ls dist/*.whl)"
+HASH="$(sha256sum "$WHEEL" | cut -d' ' -f1)"
+echo "qwed-mcp @ file://$(pwd)/$WHEEL --hash=sha256:$HASH" > /tmp/project-req.txt
+UV_PROJECT_ENVIRONMENT=/opt/venv uv pip install \
+    --require-hashes --only-binary :all: --no-deps \
+    -r /tmp/project-req.txt
+EOF
 
 # ubuntu:24.04 (noble-20260410) — same digest as builder
 FROM ubuntu@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff
