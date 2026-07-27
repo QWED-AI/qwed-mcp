@@ -73,4 +73,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 RUN useradd -m qweduser
 USER qweduser
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD pgrep -f "^qwed-mcp" > /dev/null 2>&1 || exit 1
+
 ENTRYPOINT ["qwed-mcp"]
