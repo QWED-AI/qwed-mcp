@@ -105,8 +105,8 @@ jobs:
           sarif_file: snyk.sarif
 
       - name: Push to Docker Hub
-        # Only push if Snyk passes and it's not a PR
-        if: github.event_name != 'pull_request'
+        # Only push if Docker Hub login succeeded and it's not a PR
+        if: github.event_name != 'pull_request' && env.DOCKERHUB_AUTH_AVAILABLE == 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
