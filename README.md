@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/logo.svg" alt="QWED Logo - AI Verification Engine" width="80" height="80">
+  <img src="assets/logo.png" alt="QWED Logo - AI Verification Engine" width="80" height="80">
   <h1>QWED-MCP 🔌</h1>
   <h3>Deterministic Verification for Claude Desktop & VS Code</h3>
 
