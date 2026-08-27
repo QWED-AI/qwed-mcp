@@ -256,12 +256,13 @@ Yes! The server is extensible. Fork it and add your custom `@mcp.tool()` functio
 
 ## 🗺️ Roadmap
 
-### ✅ Released (v0.2.1)
+### ✅ Released (v0.2.2)
 - [x] Context bloat resolution (RFC-9728 compatibility)
 - [x] Unified `execute_python_code` environment
 - [x] Secure process isolation (env-restricted) and robust timeouts
 - [x] Claude Desktop integration
 - [x] Windows/macOS/Linux support
+- [x] Hardened math sandbox: AST allowlist for expression evaluation (GHSA-2p69-jpm6-jrxh)
 
 ### 🚧 In Progress
 - [ ] `verify_json` — JSON Schema validation tool
