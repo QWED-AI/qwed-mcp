@@ -9,7 +9,9 @@ user-supplied math expressions.
 Security fix for GHSA-mw6r-2hvm-4rp2 (CWE-94).
 """
 
+import ast
 import re
+import unicodedata
 from typing import Any, Dict, Optional, Tuple
 
 import sympy
@@ -44,6 +46,65 @@ _DENYLIST_PATTERN = re.compile(
 )
 
 _SAFE_GLOBAL_DICT_TEMPLATE: Dict[str, Any] = {"__builtins__": {}}
+
+# CWE-94 hardening (GHSA-2p69-jpm6-jrxh): allow-list the AST node types
+# that may appear in a mathematical expression.  Anything outside this
+# set -- Attribute access, Subscript, string/bytes constants, lambdas,
+# list/tuple displays, comprehensions -- is rejected BEFORE parse_expr
+# reaches its internal eval().  The raw-source denylist above is kept as
+# defense in depth, but a substring scan of untokenized source cannot by
+# itself defend an eval sink: unlisted dunder names (``__getattribute__``,
+# ``__func__``, ``__call__``) and string-literal splitting
+# (``'__glo'+'bals'+'__'``) both bypass it, and PEP 3131 NFKC identifier
+# normalization makes ASCII-only matching unsound.
+_ALLOWED_AST_NODES = (
+    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Call, ast.Name, ast.Load,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod, ast.FloorDiv,
+    ast.USub, ast.UAdd, ast.Constant, ast.keyword,
+)
+
+_IMPLICIT_FORBIDDEN_CHARS = re.compile(r"""['"`,\[\]{}:;\\]""")
+
+
+def _validate_ast_nodes(expression: str) -> None:
+    """Reject expressions containing non-arithmetic syntax (CWE-94).
+
+    Runs on the raw input before parse_expr.  Every sandbox-escape
+    traversal needs an Attribute or Subscript node, while legitimate
+    user math (sqrt(4), 2x, sin(x), x**2 + 1) never does.
+    """
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError:
+        # Implicit-multiplication input (e.g. "2x", "sin x") is not valid
+        # Python and cannot be AST-checked here; restrict the charset so
+        # that quotes, subscripts and separators can never reappear in
+        # the transformed code.  Attribute access ("." not used as a
+        # decimal point) is likewise never legitimate in math input.
+        if _IMPLICIT_FORBIDDEN_CHARS.search(expression):
+            raise SafeParserError(
+                "Expression contains disallowed construct"
+            )
+        for i, ch in enumerate(expression):
+            if ch == "." and not (
+                (i > 0 and expression[i - 1].isdigit())
+                or (i + 1 < len(expression) and expression[i + 1].isdigit())
+            ):
+                raise SafeParserError(
+                    "Expression contains disallowed construct: attribute access"
+                )
+        return
+    for node in ast.walk(tree):
+        if not isinstance(node, _ALLOWED_AST_NODES):
+            raise SafeParserError(
+                f"Expression contains disallowed syntax: {type(node).__name__}"
+            )
+        # String/bytes literals are concatenation gadgets; math
+        # expressions never need them.
+        if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
+            raise SafeParserError(
+                "Expression contains disallowed string literal"
+            )
 
 
 def _build_safe_local_dict(
@@ -106,6 +167,12 @@ def safe_parse_expr(
     stripped = expression.strip()
     if not stripped:
         raise SafeParserError("Expression is empty")
+    # PEP 3131: CPython NFKC-normalizes identifiers when eval() compiles
+    # the transformed code, so NFKC-equivalent codepoints (mathematical
+    # bold letters, fullwidth forms, ...) written in the raw input would
+    # bypass the ASCII denylist below.  Normalize first so the denylist
+    # and the AST check see what the compiler will see.
+    stripped = unicodedata.normalize("NFKC", stripped)
     if len(stripped) > MAX_EXPRESSION_LENGTH:
         raise SafeParserError(
             f"Expression exceeds maximum length of {MAX_EXPRESSION_LENGTH} characters"
@@ -115,6 +182,7 @@ def safe_parse_expr(
         raise SafeParserError(
             f"Expression contains disallowed construct: {match.group()!r}"
         )
+    _validate_ast_nodes(stripped)
     local_dict = _build_safe_local_dict(extra_symbols)
     if transformations is None:
         transformations = standard_transformations + (
