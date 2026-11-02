@@ -45,7 +45,10 @@ def test_server_reports_its_own_version():
 @pytest.mark.parametrize("path", ["pyproject.toml", "requirements.txt"])
 def test_mcp_requirement_stays_on_1x(path):
     """MCP SDK 2.x removed Server.list_tools and Server.call_tool, which register_tools uses."""
-    text = (ROOT / path).read_text(encoding="utf-8")
+    file_path = ROOT / path
+    if not file_path.exists():
+        pytest.skip(f"{path} is not shipped in the sdist")
+    text = file_path.read_text(encoding="utf-8")
     match = re.search(r'^\s*"?(mcp[<>=!~][^"\n]*)"?,?\s*$', text, re.MULTILINE)
     assert match, f"{path} declares no mcp requirement"
     spec = Requirement(match.group(1)).specifier

@@ -264,7 +264,7 @@ Yes! The server is extensible. Fork it and add your custom `@mcp.tool()` functio
 - [x] Windows/macOS/Linux support
 - [x] Hardened math sandbox: AST allowlist for expression evaluation (GHSA-2p69-jpm6-jrxh)
 - [x] `qwedai.com` removed from the trusted skill source domains (#71)
-- [x] Requires `mcp>=1.30.0,<2`: 1.30.0 is the first MCP SDK release without GHSA-84m7-p3x7-pcfv, GHSA-rwrf-2pqf-9j8j, GHSA-5h93-6whr-6q8j and GHSA-w4fh-qvv9-3v23, and MCP SDK 2.x removed the server API qwed-mcp uses
+- [x] Requires `mcp>=1.30.0,<2`. MCP SDK 1.30.0 patches GHSA-84m7-p3x7-pcfv, GHSA-rwrf-2pqf-9j8j and GHSA-5h93-6whr-6q8j; for GHSA-w4fh-qvv9-3v23, HTTP servers that use the SDK's bearer authentication must also set `validate_token_resource=True`. qwed-mcp runs over stdio and uses neither the HTTP transports nor bearer authentication. MCP SDK 2.x removed the server API qwed-mcp uses
 - [x] Reports its own version to MCP clients during initialisation
 
 ### 🚧 In Progress
