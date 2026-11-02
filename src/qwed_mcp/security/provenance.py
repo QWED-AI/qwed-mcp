@@ -28,14 +28,15 @@ _UNTRUSTED_REGISTRIES: FrozenSet[str] = frozenset({
     "llm-tools.net",
 })
 
-# Trusted domains for skill source URLs
+# Trusted domains for skill source URLs. No QWED-owned domain is listed:
+# QWED's sources live on github.com, and a domain that lapses can be
+# registered by anyone, so it must not stay a trust anchor (#71).
 _TRUSTED_DOMAINS: FrozenSet[str] = frozenset({
     "github.com",
     "gitlab.com",
     "bitbucket.org",
     "pypi.org",
     "npmjs.com",
-    "qwedai.com",
 })
 
 # Suspicious patterns in skill code/manifest

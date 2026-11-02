@@ -9,7 +9,7 @@ description = "MCP Server for QWED Verification - Use QWED verification tools in
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
-    {name = "Rahul Dass", email = "rahul@qwedai.com"}
+    {name = "Rahul Dass", email = "rahul@qwedai.tech"}
 ]
 keywords = ["mcp", "model-context-protocol", "verification", "llm", "anthropic", "claude", "qwed"]
 classifiers = [
@@ -43,7 +43,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/QWED-AI/qwed-mcp"
-Documentation = "https://docs.qwedai.com"
+Documentation = "https://docs.qwedai.tech/mcp/overview"
 Repository = "https://github.com/QWED-AI/qwed-mcp"
 
 [project.scripts]

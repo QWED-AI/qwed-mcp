@@ -44,6 +44,24 @@ class TestSkillProvenanceGuard:
 
         assert result["verified"] is True
 
+    def test_lapsing_qwed_domain_is_not_trusted_by_default(self):
+        """qwedai.com expires and anyone can register it, so it is no trust anchor (#71)."""
+        guard = SkillProvenanceGuard()
+        for url in ("https://qwedai.com/skill", "https://skills.qwedai.com/skill"):
+            result = guard.verify_skill(_make_manifest(source_url=url))
+
+            assert result["verified"] is False
+            assert any("not in trusted list" in f for f in result["findings"])
+
+    def test_qwed_skills_on_github_stay_trusted(self):
+        """QWED's own sources live on github.com, which stays trusted."""
+        guard = SkillProvenanceGuard()
+        result = guard.verify_skill(
+            _make_manifest(source_url="https://github.com/QWED-AI/qwed-mcp")
+        )
+
+        assert result["verified"] is True
+
     # --- Registry validation ---
 
     def test_blocks_untrusted_registry(self):
