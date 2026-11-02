@@ -8,7 +8,7 @@
 [![Docker Scout](https://img.shields.io/badge/Docker-Scout_Analyzed-1D63ED.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification/tags)
 [![Cloudflare](https://img.shields.io/badge/Protected_by-Cloudflare-F38020?style=flat&logo=cloudflare&logoColor=white)](https://www.cloudflare.com/)
 [![Snyk Security](https://snyk.io/test/github/QWED-AI/qwed-mcp/badge.svg)](https://snyk.io/test/github/QWED-AI/qwed-mcp)
-[![Docs by Mintlify](https://img.shields.io/badge/Docs_by-Mintlify-0f1117?style=flat&logo=mintlify&logoColor=white)](https://docs.qwedai.com)
+[![Docs by Mintlify](https://img.shields.io/badge/Docs_by-Mintlify-0f1117?style=flat&logo=mintlify&logoColor=white)](https://docs.qwedai.tech)
 [![Deploys by Netlify](https://img.shields.io/badge/Deploys_by-Netlify-00C7B7?style=flat&logo=netlify&logoColor=white)](https://www.netlify.com)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green)](https://modelcontextprotocol.io)
@@ -19,7 +19,7 @@
 
 **MCP Server for QWED Verification** — Bring deterministic verification to Claude Desktop, VS Code, and any MCP-compatible AI assistant.
 
-> 📚 **Full Documentation:** [docs.qwedai.com/mcp](https://docs.qwedai.com/docs/mcp/overview)
+> 📚 **Full Documentation:** [docs.qwedai.tech/mcp](https://docs.qwedai.tech/mcp/overview)
 
 ---
 
@@ -309,10 +309,10 @@ black src/
 
 | Resource | Link |
 |----------|------|
-| Full Docs | [docs.qwedai.com/mcp](https://docs.qwedai.com/docs/mcp/overview) |
-| Tools Reference | [docs.qwedai.com/mcp/tools](https://docs.qwedai.com/docs/mcp/tools) |
-| Examples | [docs.qwedai.com/mcp/examples](https://docs.qwedai.com/docs/mcp/examples) |
-| Troubleshooting | [docs.qwedai.com/mcp/troubleshooting](https://docs.qwedai.com/docs/mcp/troubleshooting) |
+| Full Docs | [docs.qwedai.tech/mcp](https://docs.qwedai.tech/mcp/overview) |
+| Tools Reference | [docs.qwedai.tech/mcp/tools](https://docs.qwedai.tech/mcp/tools) |
+| Examples | [docs.qwedai.tech/mcp/examples](https://docs.qwedai.tech/mcp/examples) |
+| Troubleshooting | [docs.qwedai.tech/mcp/troubleshooting](https://docs.qwedai.tech/mcp/troubleshooting) |
 | MCP Protocol | [modelcontextprotocol.io](https://modelcontextprotocol.io) |
 
 ---
@@ -332,6 +332,6 @@ Apache 2.0 — See [LICENSE](LICENSE)
 ---
 
 <p align="center">
-  <b>Built by <a href="https://qwedai.com">QWED AI</a></b><br>
+  <b>Built by <a href="https://qwedai.tech">QWED AI</a></b><br>
   <i>Making AI outputs trustworthy through formal verification</i>
 </p>
