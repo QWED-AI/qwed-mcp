@@ -4,8 +4,8 @@
   <h3>Deterministic Verification for Claude Desktop & VS Code</h3>
 
 [![PyPI](https://img.shields.io/pypi/v/qwed-mcp?color=blue&label=PyPI)](https://pypi.org/project/qwed-mcp/)
-[![Docker Verified](https://img.shields.io/badge/Docker-Verified_Publisher-blue.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification)
-[![Docker Scout](https://img.shields.io/badge/Docker-Scout_Analyzed-1D63ED.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification/tags)
+[![Docker Verified](https://img.shields.io/badge/Docker-Verified_Publisher-blue.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-mcp)
+[![Docker Scout](https://img.shields.io/badge/Docker-Scout_Analyzed-1D63ED.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-mcp/tags)
 [![Cloudflare](https://img.shields.io/badge/Protected_by-Cloudflare-F38020?style=flat&logo=cloudflare&logoColor=white)](https://www.cloudflare.com/)
 [![Snyk Security](https://snyk.io/test/github/QWED-AI/qwed-mcp/badge.svg)](https://snyk.io/test/github/QWED-AI/qwed-mcp)
 [![Docs by Mintlify](https://img.shields.io/badge/Docs_by-Mintlify-0f1117?style=flat&logo=mintlify&logoColor=white)](https://docs.qwedai.tech)
@@ -256,13 +256,16 @@ Yes! The server is extensible. Fork it and add your custom `@mcp.tool()` functio
 
 ## 🗺️ Roadmap
 
-### ✅ Released (v0.2.2)
+### ✅ Released (v0.2.3)
 - [x] Context bloat resolution (RFC-9728 compatibility)
 - [x] Unified `execute_python_code` environment
 - [x] Secure process isolation (env-restricted) and robust timeouts
 - [x] Claude Desktop integration
 - [x] Windows/macOS/Linux support
 - [x] Hardened math sandbox: AST allowlist for expression evaluation (GHSA-2p69-jpm6-jrxh)
+- [x] `qwedai.com` removed from the trusted skill source domains (#71)
+- [x] Requires `mcp>=1.30.0,<2`. MCP SDK 1.30.0 patches GHSA-84m7-p3x7-pcfv, GHSA-rwrf-2pqf-9j8j and GHSA-5h93-6whr-6q8j; for GHSA-w4fh-qvv9-3v23, HTTP servers that use the SDK's bearer authentication must also set `validate_token_resource=True`. qwed-mcp runs over stdio and uses neither the HTTP transports nor bearer authentication. MCP SDK 2.x removed the server API qwed-mcp uses
+- [x] Reports its own version to MCP clients during initialisation
 
 ### 🚧 In Progress
 - [ ] `verify_json` — JSON Schema validation tool

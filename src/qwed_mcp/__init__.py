@@ -7,8 +7,7 @@ Works with Claude Desktop, VS Code, and any MCP-compatible client.
 
 from .server import mcp, main
 from .tools import register_tools
-
-__version__ = "0.2.2"
+from ._version import __version__
 
 __all__ = [
     "mcp",
