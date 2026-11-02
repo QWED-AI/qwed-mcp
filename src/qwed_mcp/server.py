@@ -12,6 +12,7 @@ from mcp.server.stdio import stdio_server
 import sentry_sdk
 import os
 
+from ._version import __version__
 from .tools import register_tools
 from .security.provenance import SkillProvenanceGuard
 
@@ -33,7 +34,8 @@ if os.getenv("SENTRY_DSN"):
     )
 
 # Initialize MCP server
-mcp = Server("qwed-verification")
+# Pass the version so clients see qwed-mcp's own, not the MCP SDK's
+mcp = Server("qwed-verification", version=__version__)
 
 
 def track_verification(tool_name: str, result: dict):
