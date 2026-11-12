@@ -86,9 +86,23 @@ class _FloatConst:
 
 _FLOAT = _FloatConst()
 
-# A value is an exact Fraction, an _Approx, _FLOAT, or None when it depends
-# on a symbol (SymPy keeps those symbolic, so they cost nothing to build).
-_Value = Union[Fraction, _Approx, _FloatConst, None]
+
+class _FloatResult:
+    """The result of a function of a float: usually a float, but it can be
+    an exact number (sin(0.0) is 0), and its size is unknown
+    (abs(2.0**1000000000) keeps the huge exponent)."""
+
+    __slots__ = ()
+
+
+_FLOAT_RESULT = _FloatResult()
+
+# A value is an exact Fraction, an _Approx, _FLOAT, _FLOAT_RESULT, or None
+# when it depends on a symbol (SymPy keeps those symbolic, so they cost
+# nothing to build).
+_Value = Union[Fraction, _Approx, _FloatConst, _FloatResult, None]
+_FLOAT_KINDS = (_FloatConst, _FloatResult)
+_EXACT_CONVERSIONS = frozenset({"Integer", "Rational", "factorial", "binomial"})
 
 
 def _bits(value: Fraction) -> int:
@@ -228,16 +242,13 @@ def _call_value(node: ast.Call, args: list, values: dict) -> _Value:
         raise SafeParserError(f"Keyword arguments to {name} are not admitted")
     if name == "Float":
         return _float_value(node, args, values)
-    if any(arg is _FLOAT for arg in args):
+    if any(isinstance(arg, _FLOAT_KINDS) for arg in args):
         # A float can carry a huge exponent (2.0**1000000000), so turning it
         # into an exact number, or a factorial or binomial of it, cannot be
-        # bounded. Anything else of a float is a float.
-        if name in {"Integer", "Rational", "factorial", "binomial"}:
+        # bounded. Any other function of a float may be exact or huge.
+        if name in _EXACT_CONVERSIONS:
             raise SafeParserError(_COST_ERROR)
-        # Other functions of a float can still give an exact number
-        # (sin(0.0) is exactly 0), so their result is a bounded constant,
-        # not a float.
-        return _Approx(64)
+        return _FLOAT_RESULT
     if name in _VALUED_CALLS:
         return _VALUED_CALLS[name](args)
     if name == "Symbol" or any(arg is None for arg in args):
@@ -303,9 +314,28 @@ def _exact_binop(op: ast.operator, left: Fraction, right: Fraction) -> _Value:
     return None
 
 
+def _float_result_binop(op: ast.operator, left: _Value, right: _Value) -> _Value:
+    """Arithmetic with a function-of-float result. A power is refused when
+    that result is the exponent of an exact base other than 0, 1 or -1, or
+    the base of an exponent other than 0, 1 or -1: either could be an exact
+    number of unbounded size."""
+    if isinstance(op, ast.Pow):
+        if right is _FLOAT_RESULT and not (
+            left is _FLOAT or (isinstance(left, Fraction) and left in (0, 1, -1))
+        ):
+            raise SafeParserError(_COST_ERROR)
+        if left is _FLOAT_RESULT and not (
+            isinstance(right, Fraction) and right in (0, 1, -1)
+        ):
+            raise SafeParserError(_COST_ERROR)
+    return _FLOAT_RESULT
+
+
 def _binop_value(op: ast.operator, left: _Value, right: _Value) -> _Value:
     if left is None or right is None:
         return None  # symbolic: SymPy keeps it symbolic
+    if left is _FLOAT_RESULT or right is _FLOAT_RESULT:
+        return _float_result_binop(op, left, right)
     if left is _FLOAT or right is _FLOAT:
         return _FLOAT  # float arithmetic keeps a fixed precision
     if isinstance(op, ast.Pow):

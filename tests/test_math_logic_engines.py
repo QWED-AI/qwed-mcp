@@ -125,6 +125,12 @@ def test_keyword_arguments_to_counting_and_constructors_are_refused(expression):
         safe_parse_expr(expression)
 
 
+def test_all_prefix_is_stripped_only_at_the_start():
+    # "small" must stay one proposition name, not become "sm".
+    result = verify_logic_statement(["all small are big", "small"], "big")
+    assert result["verification_mode"] == "PROVEN"
+
+
 def test_premises_must_be_a_list_of_strings():
     result = verify_logic_statement("A implies B", "B")
     assert result["verification_mode"] == "UNVERIFIABLE"
@@ -185,6 +191,10 @@ def test_premises_must_be_a_list_of_strings():
         "1e-1000000000",
         "1E+5000000",
         "2**(10000000000 + sin(0.0))",
+        "Integer(abs(2.0**1000000000))",
+        "Rational(abs(2.0**1000000000))",
+        "abs(2.0**1000000000)**2",
+        "sin(0.5)**2",
         "2**pi",
     ],
 )

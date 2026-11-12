@@ -87,7 +87,8 @@ class _StatementParser:
         if " are " in stmt:  # "all X are Y"
             left, right = stmt.split(" are ", 1)
             return z3.Implies(
-                self.variable(left.replace("all ", "")), self.variable(right)
+                self.variable(left[4:] if left.startswith("all ") else left),
+                self.variable(right),
             )
         # "X is Y" has no single propositional reading (identity, membership,
         # implication), and reading it as X alone drops Y. Refuse it (#26).
