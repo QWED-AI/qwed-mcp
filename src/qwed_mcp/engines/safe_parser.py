@@ -373,6 +373,52 @@ def _node_value(node: ast.AST, values: dict) -> _Value:
     return None
 
 
+# Cap for the collapse bound, so the arithmetic below stays small.
+_BOUND_CAP = 10 * MAX_INTEGER_BITS
+
+
+def _collapse_bits(node: ast.AST, values: dict, bounds: dict) -> int:
+    """An upper bound, in bits, on the number ``node`` could evaluate to if
+    its symbols cancelled out (SymPy turns ``x - x`` into 0 while building
+    the expression). A lone symbol counts as 0 bits (it never becomes a
+    constant by itself); constants count their size.
+    """
+    value = values.get(id(node))
+    if isinstance(value, Fraction):
+        return _bits(value)
+    if isinstance(value, _Approx):
+        return value.bits
+    children = [bounds.get(id(child), 0) for child in ast.iter_child_nodes(node)]
+    if isinstance(node, ast.BinOp):
+        left, right = bounds.get(id(node.left), 0), bounds.get(id(node.right), 0)
+        if isinstance(node.op, (ast.Add, ast.Sub)):
+            return min(max(left, right) + 1, _BOUND_CAP)
+        if isinstance(node.op, ast.Pow):
+            return min(left * 2 ** min(right, 64), _BOUND_CAP)
+        return min(left + right, _BOUND_CAP)
+    if isinstance(node, ast.Call):
+        return min(sum(children) + 2, _BOUND_CAP)
+    return max(children, default=0)
+
+
+def _check_symbolic_power(node: ast.AST, values: dict, bounds: dict) -> None:
+    """A power with a symbolic side is bounded by what it could collapse to:
+    2**(10**10 + x - x) is 2**(10**10) once SymPy cancels x - x."""
+    if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)):
+        return
+    left, right = values.get(id(node.left)), values.get(id(node.right))
+    if left is not None and right is not None:
+        return
+    if isinstance(left, Fraction) and left in (0, 1, -1):
+        return
+    base_bits = bounds.get(id(node.left), 0)
+    exponent_bits = bounds.get(id(node.right), 0)
+    if base_bits <= 1:
+        return  # a symbol, or something that can only collapse to 0, 1 or -1
+    if exponent_bits > 64 or base_bits * 2**exponent_bits > MAX_INTEGER_BITS:
+        raise SafeParserError(_COST_ERROR)
+
+
 def _check_evaluation_cost(code: str) -> None:
     """Refuse code whose constant arithmetic would exceed the cost bounds.
 
@@ -384,11 +430,14 @@ def _check_evaluation_cost(code: str) -> None:
     except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
         raise SafeParserError(f"Expression could not be checked: {exc}") from exc
     values: dict = {}
+    bounds: dict = {}
     stack = [(tree.body, False)]
     while stack:
         node, children_done = stack.pop()
         if children_done:
+            _check_symbolic_power(node, values, bounds)
             values[id(node)] = _node_value(node, values)
+            bounds[id(node)] = _collapse_bits(node, values, bounds)
             continue
         stack.append((node, True))
         stack.extend((child, False) for child in ast.iter_child_nodes(node))

@@ -196,6 +196,9 @@ def test_premises_must_be_a_list_of_strings():
         "abs(2.0**1000000000)**2",
         "sin(0.5)**2",
         "2**pi",
+        # symbols that cancel while SymPy builds the expression
+        "2**(10**10 + x - x)",
+        "(x - x + 2)**(10**10)",
     ],
 )
 def test_expression_beyond_cost_bound_is_refused_quickly(expression):
@@ -238,6 +241,11 @@ def test_expression_beyond_cost_bound_is_refused_quickly(expression):
         "pi**2",
         "1e-300",
         "sin(0.5) + 1.5",
+        "2**x",
+        "2**(x + 1)",
+        "(x + 1)**3",
+        "x**(1/2)",
+        "E**(100*x)",
         "Float(1/3, 50)",
         "1.5**1000000",
     ],
