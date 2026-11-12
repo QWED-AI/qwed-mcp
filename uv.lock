@@ -736,32 +736,14 @@ wheels = [
 ]
 
 [[package]]
-name = "qwed-finance"
-version = "2.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "jsonschema" },
-    { name = "mpmath" },
-    { name = "sqlglot" },
-    { name = "sympy" },
-    { name = "z3-solver" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/cf/bd/75d72e823cb20eb40096279e9515bf69653e11ab9c022bad6cd4e4a298c4/qwed_finance-2.1.0.tar.gz", hash = "sha256:a817cbc684fe667cd2425d3505e64a4d0bf2349994f282cc0a8f98c45034b9b0", size = 74676, upload-time = "2026-05-02T13:26:40.589Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7a/93/1f76779a0298129880759f87ccd6989a23ec93c22b8a7da96e065c987c24/qwed_finance-2.1.0-py3-none-any.whl", hash = "sha256:b66db2e4d8091fdc5b6d4a29e9904b047ce9bd574eb94f114bbcf8fa145ffda4", size = 65665, upload-time = "2026-05-02T13:26:39.021Z" },
-]
-
-[[package]]
 name = "qwed-mcp"
 version = "0.2.3"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "cryptography" },
-    { name = "httpx" },
     { name = "mcp" },
     { name = "pyjwt" },
-    { name = "qwed-finance" },
-    { name = "qwed-ucp" },
     { name = "sentry-sdk" },
     { name = "sympy" },
     { name = "z3-solver" },
@@ -776,32 +758,18 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.5,<5" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
     { name = "cryptography", specifier = ">=46.0.5" },
-    { name = "httpx", specifier = ">=0.27.0" },
     { name = "mcp", specifier = ">=1.30.0,<2" },
     { name = "pyjwt", specifier = ">=2.13.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
-    { name = "qwed-finance", specifier = ">=1.2.0" },
-    { name = "qwed-ucp", specifier = ">=0.2.0" },
     { name = "sentry-sdk", specifier = ">=2.13.0" },
     { name = "sympy", specifier = ">=1.12" },
     { name = "z3-solver", specifier = ">=4.12.0.0" },
 ]
 provides-extras = ["dev"]
-
-[[package]]
-name = "qwed-ucp"
-version = "0.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "jsonschema" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/9e/6f/41c25f2e939b0f5545545e84dbb9e9bca31476c0bdcab637554d39680342/qwed_ucp-0.2.0.tar.gz", hash = "sha256:ba8c453ffe7fcdfee0eedc60ec1011ad4816e1056c7a966c4ab44a81ca5e2357", size = 36271, upload-time = "2026-01-20T09:45:02.92Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/48/fd/57004080cc44c9518d0a62b9ec3ab8f507ed2faefa80ba79de1a5d1e7447/qwed_ucp-0.2.0-py3-none-any.whl", hash = "sha256:1cd598b7024457cc24e76a1afe66013974700b1503fc9445bf144c729c2b30e9", size = 21918, upload-time = "2026-01-20T09:45:01.915Z" },
-]
 
 [[package]]
 name = "referencing"
@@ -950,15 +918,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/65/e0/9bf5e5fc7442b10880f3ec0eff0ef4208b84a099606f343ec4f5445227fb/sentry_sdk-2.59.0.tar.gz", hash = "sha256:cd265808ef8bf3f3edf69b527c0a0b2b6b1322762679e55b8987db2e9584aec1", size = 447331, upload-time = "2026-05-04T12:19:06.538Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bf/00/b8cc413748fb6383d1582e7cda51314f99743351c462a92dc690d5b5853b/sentry_sdk-2.59.0-py2.py3-none-any.whl", hash = "sha256:abcf65ee9a9d9cdebf9ad369782408ecca9c1c792686ef06ba34f5ab233527fe", size = 468432, upload-time = "2026-05-04T12:19:04.741Z" },
-]
-
-[[package]]
-name = "sqlglot"
-version = "30.7.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c4/56/56d234bb267009a4b5fbaf56bd11eb5db91e0eaf0235b3ab53759d0cac2f/sqlglot-30.7.0.tar.gz", hash = "sha256:eaf90c7d61978ce98fb52718b7a578054bd0cebcc9ab6f3818ad4391ea9d6b69", size = 5860425, upload-time = "2026-05-04T17:02:23.346Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1f/08/bdc2fbd41b61173dade9ebb96b56e072a1cd7bdac24d8195e6dc5005186e/sqlglot-30.7.0-py3-none-any.whl", hash = "sha256:30421efcf3d57f95e57deaa755f65976c8b10735923f79986595dea912dc8206", size = 683613, upload-time = "2026-05-04T17:02:21.623Z" },
 ]
 
 [[package]]
