@@ -121,7 +121,7 @@ def sql_issues(
     root = statements[0]
     issues: List[str] = []
     issues.extend(_statement_issues(root))
-    issues.extend(_condition_issues(root))
+    issues.extend(_condition_issues(root, dialect))
     issues.extend(_function_issues(root))
     if allowed_tables is not None:
         issues.extend(_table_issues(root, allowed_tables, dialect))
@@ -139,9 +139,10 @@ _LINE_BREAKS = frozenset("\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
 _BRACKET_DIALECTS = frozenset({"tsql", "sqlite"})
 
 
-def _quoted_end(query: str, start: int, closers: dict):
+def _quoted_end(query: str, start: int, closers: dict, doubled: frozenset):
     """The index after the quoted string or identifier opening at
-    ``start``, or an issue when it is unterminated or holds a backslash."""
+    ``start``, or an issue when it is unterminated or holds a backslash.
+    A closer doubled inside an opener in ``doubled`` is an escaped closer."""
     opener = query[start]
     closer = closers[opener]
     j = start + 1
@@ -150,7 +151,7 @@ def _quoted_end(query: str, start: int, closers: dict):
             return "Backslash inside a string literal is not admitted"
         if query[j] != closer:
             j += 1
-        elif opener != "[" and query.startswith(closer * 2, j):
+        elif opener in doubled and query.startswith(closer * 2, j):
             j += 2  # a doubled quote is an escaped quote
         else:
             return j + 1
@@ -194,12 +195,15 @@ def _lexical_issues(query: str, dialect: Optional[str] = None) -> List[str]:
     escape.
     """
     closers = dict(_CLOSERS)
+    doubled = frozenset(_CLOSERS)
     if (dialect or "").lower() in _BRACKET_DIALECTS:
         closers["["] = "]"
+    if (dialect or "").lower() == "tsql":
+        doubled |= {"["}  # SQL Server reads ]] in brackets as one ]
     i = 0
     while i < len(query):
         if query[i] in closers:
-            step = _quoted_end(query, i, closers)
+            step = _quoted_end(query, i, closers, doubled)
         else:
             step = _comment_end(query, i)
             if step is None:
@@ -333,14 +337,44 @@ def _row_independent(node: exp.Expression) -> bool:
     return not any(_correlated(select) for select in node.find_all(exp.Select))
 
 
-def _self_comparison(node: exp.Expression) -> bool:
-    """``x = x`` and the like: true for every row where x is not NULL."""
-    if isinstance(node, (exp.EQ, exp.GTE, exp.LTE, exp.NullSafeEQ)):
-        return node.this == node.expression
-    return False
+def _unparenthesised(node: exp.Expression) -> exp.Expression:
+    while isinstance(node, exp.Paren):
+        node = node.this
+    return node
 
 
-def _condition_issues(root: exp.Expression) -> List[str]:
+def _operand_key(node: exp.Expression, dialect: Optional[str]) -> exp.Expression:
+    """The operand as the database reads it: without parentheses, and with
+    every identifier as it resolves (unquoted names fold, quoted keep their
+    case)."""
+    node = _unparenthesised(node).copy()
+    for paren in list(node.find_all(exp.Paren)):
+        paren.replace(_unparenthesised(paren))
+    for identifier in list(node.find_all(exp.Identifier)):
+        key = _identifier_key(identifier, dialect)
+        identifier.replace(exp.Identifier(this=key, quoted=True))
+    return node
+
+
+def _self_comparison(node: exp.Expression, dialect: Optional[str] = None) -> bool:
+    """``x = x`` and the like: true for every row where x is not NULL.
+
+    The operands are compared as the database reads them, so ``id = (id)``,
+    ``ID = id`` and ``users.id = id`` count too: in a valid query, an
+    unqualified name that one table qualifies on the other side is that
+    same column.
+    """
+    if not isinstance(node, (exp.EQ, exp.GTE, exp.LTE, exp.NullSafeEQ)):
+        return False
+    left = _operand_key(node.this, dialect)
+    right = _operand_key(node.expression, dialect)
+    if isinstance(left, exp.Column) and isinstance(right, exp.Column):
+        if left.name == right.name and not (left.table and right.table):
+            return True
+    return left == right
+
+
+def _condition_issues(root: exp.Expression, dialect: Optional[str] = None) -> List[str]:
     conditions = []
     for clause in root.find_all(exp.Where, exp.Having):
         conditions.append(clause.this)
@@ -364,7 +398,7 @@ def _condition_issues(root: exp.Expression) -> List[str]:
                     "Suspicious tautology detected: condition that does not depend "
                     f"on the row '{part.sql()}'"
                 )
-            elif _self_comparison(part):
+            elif _self_comparison(part, dialect):
                 issues.append(
                     f"Suspicious tautology detected: self-comparison '{part.sql()}'"
                 )

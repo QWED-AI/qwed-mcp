@@ -185,6 +185,50 @@ def test_null_safe_self_comparison_is_refused():
     assert verify_sql_query(query, dialect="postgres")["verified"] is False
 
 
+# The same column written differently: in parentheses, in another case, quoted
+# as the database folds it, or qualified on one side only (in a valid query an
+# unqualified name that one table qualifies on the other side is that column).
+SELF_COMPARISON_FORMS = [
+    ("SELECT * FROM users WHERE id = (id)", None),
+    ("SELECT * FROM users WHERE ((id)) = id", None),
+    ("SELECT * FROM users WHERE (id + 1) = id + 1", None),
+    ("SELECT * FROM users WHERE ID = id", None),
+    ('SELECT * FROM users WHERE "id" = id', "postgres"),
+    ('SELECT * FROM users WHERE "ID" = id', "snowflake"),
+    ("SELECT * FROM users WHERE users.id = id", None),
+    ("SELECT * FROM users u WHERE id >= u.id", None),
+]
+
+
+@pytest.mark.parametrize("query,dialect", SELF_COMPARISON_FORMS)
+def test_self_comparison_written_differently_is_refused(query, dialect):
+    assert verify_sql_query(query, dialect=dialect)["verified"] is False
+
+
+@pytest.mark.parametrize(
+    "query,dialect",
+    [
+        # "ID" keeps its case in PostgreSQL, so it is another column than id
+        ('SELECT * FROM users WHERE "ID" = id', "postgres"),
+        ("SELECT * FROM a JOIN b ON a.id = b.id", None),
+    ],
+)
+def test_different_columns_are_not_a_self_comparison(query, dialect):
+    result = verify_sql_query(query, dialect=dialect)
+    assert result["issues"] == []
+    assert result["verified"] is True
+
+
+def test_tsql_doubled_bracket_is_an_escaped_bracket():
+    # SQL Server reads ]] inside brackets as one ], so '#' is part of the name.
+    query = "SELECT * FROM [a]]#b]"
+    result = verify_sql_query(query, dialect="tsql")
+    assert result["issues"] == []
+    assert result["verified"] is True
+    # SQLite has no such escape: the name ends at the first ].
+    assert verify_sql_query(query, dialect="sqlite")["verified"] is False
+
+
 def test_quoted_table_name_keeps_its_case():
     allowed = ["users"]
     query = 'SELECT * FROM "Users"'
