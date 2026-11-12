@@ -457,3 +457,29 @@ def test_long_or_chain_is_a_verdict_not_a_recursion_error():
     query = "SELECT * FROM t WHERE " + " OR ".join(f"a = {i}" for i in range(3000))
     result = verify_sql_query(query)
     assert result["verified"] in (True, False)
+
+
+# #60: the code engine's "sql" branch gives the SQL engine's verdict.
+CODE_ENGINE_SQL = [
+    "DROP TABLE users",
+    "DROP DATABASE production",
+    "TRUNCATE TABLE orders",
+    "DELETE FROM users",
+    "UPDATE users SET admin = 1",
+    "GRANT ALL ON users TO bob",
+    "SELECT * FROM users WHERE 1=1",
+    "SELECT * FROM users WHERE id = id",
+    "not sql at all",
+    "SELECT id FROM users WHERE id = :id",
+    "SELECT id, email FROM users  -- only fetch non-PII columns\nWHERE active = 1",
+]
+
+
+@pytest.mark.parametrize("query", CODE_ENGINE_SQL)
+def test_code_engine_sql_branch_matches_the_sql_engine(query):
+    from qwed_mcp.engines.code_engine import verify_code_safety
+
+    code_result = verify_code_safety(query, "sql")
+    sql_result = verify_sql_query(query)
+    assert code_result["verified"] is sql_result["verified"]
+    assert code_result["issues"] == sql_result["issues"]
