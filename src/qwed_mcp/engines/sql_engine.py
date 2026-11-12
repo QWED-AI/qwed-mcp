@@ -247,13 +247,23 @@ def _outside_subqueries(node: exp.Expression) -> Iterable[exp.Expression]:
 
 
 def _correlated(select: exp.Select) -> bool:
-    """Whether a subquery refers to a table of an enclosing query, through a
-    qualified column whose table it does not read itself."""
+    """Whether a subquery refers to a row of an enclosing query.
+
+    A qualified column whose table or derived-table alias the subquery does
+    not define itself is an outer reference. So is any column in a subquery
+    that reads no table at all (EXISTS (SELECT 1 WHERE id = 7) tests the
+    outer row's id).
+    """
     local = {table.alias_or_name.lower() for table in select.find_all(exp.Table)}
-    return any(
-        column.table and column.table.lower() not in local
-        for column in select.find_all(exp.Column)
-    )
+    local |= {
+        subquery.alias.lower()
+        for subquery in select.find_all(exp.Subquery)
+        if subquery.alias
+    }
+    columns = list(select.find_all(exp.Column))
+    if not local:
+        return bool(columns)
+    return any(column.table and column.table.lower() not in local for column in columns)
 
 
 def _row_independent(node: exp.Expression) -> bool:
@@ -427,7 +437,7 @@ def _table_allowed(
     keys = [_identifier_key(part, dialect) for part in parts]
     for entry in allowed:
         if len(entry) > 2 and entry.startswith('"') and entry.endswith('"'):
-            if parts[-1].quoted and parts[-1].name == entry[1:-1]:
+            if parts and parts[-1].quoted and parts[-1].name == entry[1:-1]:
                 return True
             continue
         wanted = entry.split(".")

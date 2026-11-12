@@ -328,3 +328,16 @@ def test_correlated_and_column_subqueries_are_admitted():
     ]
     for query in queries:
         assert verify_sql_query(query)["verified"] is True, query
+
+
+def test_derived_table_alias_is_local_to_the_subquery():
+    query = (
+        "SELECT * FROM users WHERE id = 7 OR EXISTS "
+        "(SELECT 1 FROM (SELECT id FROM orders) AS d WHERE d.id = 1)"
+    )
+    assert verify_sql_query(query)["verified"] is False
+
+
+def test_table_less_subquery_reads_the_outer_row():
+    query = "SELECT * FROM users WHERE EXISTS (SELECT 1 WHERE id = 7)"
+    assert verify_sql_query(query, dialect="postgres")["verified"] is True
