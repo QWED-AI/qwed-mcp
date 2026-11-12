@@ -156,6 +156,7 @@ def test_premises_must_be_a_list_of_strings():
         "exp(100000*log(10))**10",
         "((10**1000)**Rational(1, 2))**10000",
         "2**sqrt(2)",
+        "binomial(1/(2**400000), 10000)",
     ],
 )
 def test_expression_beyond_cost_bound_is_refused_quickly(expression):
@@ -193,6 +194,7 @@ def test_expression_beyond_cost_bound_is_refused_quickly(expression):
         "sin(1)**2",
         "x**sqrt(2)",
         "E**10",
+        "binomial(Rational(1, 2), 3)",
     ],
 )
 def test_bounded_expression_still_parses(expression):

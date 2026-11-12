@@ -111,8 +111,11 @@ def _binomial_value(n: _Value, k: _Value) -> _Value:
             raise SafeParserError(_COST_ERROR)
         if arg is not None and abs(arg) > MAX_FACTORIAL_ARGUMENT:
             raise SafeParserError(_COST_ERROR)
-    if n is None or k is None or n.denominator != 1 or k.denominator != 1 or k < 0:
+    if n is None or k is None or k.denominator != 1 or k < 0:
         return None
+    if n.denominator != 1:
+        # A product of k factors of n's size: binomial(1/2**400000, 10000).
+        return _Approx(_bits(n) * int(k) + 1)
     n_int, k_int = int(n), int(k)
     if n_int >= 0:
         return _bounded(Fraction(math.comb(n_int, k_int)))
@@ -194,19 +197,15 @@ def _call_value(node: ast.Call, args: list) -> _Value:
     return _Approx(sum(sizes) + 2)
 
 
-def _pow_value(left: _Value, right: _Value) -> _Value:
-    if right is None:
-        return None  # a symbolic exponent stays symbolic
-    if isinstance(left, Fraction) and left in (0, 1, -1):
-        if isinstance(right, Fraction) and right.denominator == 1:
-            return None if left == 0 and right < 0 else left ** int(right)
-        return _Approx(2)
-    if isinstance(right, _Approx):
-        if left is None:
-            return None
-        raise SafeParserError(_COST_ERROR)  # a constant exponent it cannot bound
-    if left is None:
-        return None
+def _unit_power(left: Fraction, right: _Value) -> _Value:
+    """0, 1 or -1 to any power: no larger than the base."""
+    if isinstance(right, Fraction) and right.denominator == 1:
+        return None if left == 0 and right < 0 else left ** int(right)
+    return _Approx(2)
+
+
+def _constant_power(left: _Value, right: Fraction) -> _Value:
+    """A constant base to a known exponent."""
     if right.denominator != 1:
         # A root of a constant: SymPy may fold it exactly, so keep a bound.
         return _Approx(_size(left) * abs(right.numerator) // right.denominator + 1)
@@ -214,9 +213,19 @@ def _pow_value(left: _Value, right: _Value) -> _Value:
         raise SafeParserError(_COST_ERROR)
     if isinstance(left, _Approx):
         return _Approx(left.bits * abs(int(right)))
-    if left == 0 and right < 0:
-        return None  # division by zero: SymPy gives zoo
     return left ** int(right)
+
+
+def _pow_value(left: _Value, right: _Value) -> _Value:
+    if right is None:
+        return None  # a symbolic exponent stays symbolic
+    if isinstance(left, Fraction) and left in (0, 1, -1):
+        return _unit_power(left, right)
+    if left is None:
+        return None  # a symbolic base stays symbolic
+    if isinstance(right, _Approx):
+        raise SafeParserError(_COST_ERROR)  # a constant exponent it cannot bound
+    return _constant_power(left, right)
 
 
 def _exact_binop(op: ast.operator, left: Fraction, right: Fraction) -> _Value:
