@@ -147,6 +147,15 @@ def test_premises_must_be_a_list_of_strings():
         "factorial(100000000)(1)",
         "binomial(-1, 100000000)",
         "2x + 100_000_000!",
+        # constant calls the walk sizes but does not compute exactly
+        "2**abs(10**10)",
+        "factorial(factorial(factorial(5)))",
+        "10**factorial(20)",
+        "10**binomial(100, 50)",
+        "10**sqrt(10**24)",
+        "exp(100000*log(10))**10",
+        "((10**1000)**Rational(1, 2))**10000",
+        "2**sqrt(2)",
     ],
 )
 def test_expression_beyond_cost_bound_is_refused_quickly(expression):
@@ -178,6 +187,12 @@ def test_expression_beyond_cost_bound_is_refused_quickly(expression):
         "factorial(20)**2",
         "binomial(10, 3)",
         "binomial(x, 3)",
+        "factorial(factorial(5))",
+        "sqrt(16)**3",
+        "pi**2",
+        "sin(1)**2",
+        "x**sqrt(2)",
+        "E**10",
     ],
 )
 def test_bounded_expression_still_parses(expression):
