@@ -64,9 +64,9 @@ def _constant_value(node: ast.AST) -> Optional[Fraction]:
         return _bounded(Fraction(value))
     if isinstance(node, ast.UnaryOp):
         operand = _constant_value(node.operand)
-        if operand is None:
-            return None
-        return -operand if isinstance(node.op, ast.USub) else operand
+        if operand is None or not isinstance(node.op, ast.USub):
+            return operand
+        return -operand
     if isinstance(node, ast.BinOp):
         left = _constant_value(node.left)
         right = _constant_value(node.right)
@@ -74,42 +74,64 @@ def _constant_value(node: ast.AST) -> Optional[Fraction]:
             return None
         return _binop_value(node.op, left, right)
     if isinstance(node, ast.Call):
-        args = [_constant_value(arg) for arg in node.args]
-        for keyword in node.keywords:
-            _constant_value(keyword.value)
-        name = node.func.id if isinstance(node.func, ast.Name) else ""
-        if name in {"factorial", "binomial"} and args and args[0] is not None:
-            if args[0] > MAX_FACTORIAL_ARGUMENT:
-                raise SafeParserError(_COST_ERROR)
+        _check_call_cost(node)
         return None
     for child in ast.iter_child_nodes(node):
         _constant_value(child)
     return None
 
 
-def _binop_value(op: ast.operator, left: Fraction, right: Fraction) -> Optional[Fraction]:
-    if isinstance(op, (ast.Add, ast.Sub)):
-        return _bounded(left + right if isinstance(op, ast.Add) else left - right)
-    if isinstance(op, ast.Mult):
-        if _bits(left) + _bits(right) > MAX_INTEGER_BITS:
+def _check_call_cost(node: ast.Call) -> None:
+    """Bound the arguments of a call, and the size of factorial/binomial."""
+    args = [_constant_value(arg) for arg in node.args]
+    for keyword in node.keywords:
+        _constant_value(keyword.value)
+    name = node.func.id if isinstance(node.func, ast.Name) else ""
+    first = args[0] if args else None
+    if name in {"factorial", "binomial"} and first is not None:
+        if first > MAX_FACTORIAL_ARGUMENT:
             raise SafeParserError(_COST_ERROR)
-        return left * right
-    if isinstance(op, ast.Pow):
-        if right.denominator != 1:
-            return None  # a root: SymPy keeps it symbolic
-        if abs(left) in (0, 1):
-            return left ** int(right) if right >= 0 or left != 0 else None
-        if abs(right) > MAX_INTEGER_BITS or _bits(left) * abs(right) > MAX_INTEGER_BITS:
-            raise SafeParserError(_COST_ERROR)
+
+
+def _pow_value(left: Fraction, right: Fraction) -> Optional[Fraction]:
+    if right.denominator != 1:
+        return None  # a root: SymPy keeps it symbolic
+    if left == 0 and right < 0:
+        return None  # division by zero: SymPy gives zoo
+    if abs(left) == 1 or left == 0:
         return left ** int(right)
+    if abs(right) > MAX_INTEGER_BITS or _bits(left) * abs(right) > MAX_INTEGER_BITS:
+        raise SafeParserError(_COST_ERROR)
+    return left ** int(right)
+
+
+def _mult_value(left: Fraction, right: Fraction) -> Fraction:
+    if _bits(left) + _bits(right) > MAX_INTEGER_BITS:
+        raise SafeParserError(_COST_ERROR)
+    return left * right
+
+
+def _division_value(op: ast.operator, left: Fraction, right: Fraction) -> Optional[Fraction]:
     if right == 0:
         return None
     if isinstance(op, ast.Div):
         return _bounded(left / right)
     if isinstance(op, ast.FloorDiv):
         return _bounded(Fraction(left // right))
-    if isinstance(op, ast.Mod):
-        return _bounded(left % right)
+    return _bounded(left % right)
+
+
+def _binop_value(op: ast.operator, left: Fraction, right: Fraction) -> Optional[Fraction]:
+    if isinstance(op, ast.Add):
+        return _bounded(left + right)
+    if isinstance(op, ast.Sub):
+        return _bounded(left - right)
+    if isinstance(op, ast.Mult):
+        return _mult_value(left, right)
+    if isinstance(op, ast.Pow):
+        return _pow_value(left, right)
+    if isinstance(op, (ast.Div, ast.FloorDiv, ast.Mod)):
+        return _division_value(op, left, right)
     return None
 
 
@@ -120,29 +142,38 @@ _FALLBACK_FACTORIAL = re.compile(r"(\d+|[A-Za-z_]\w*|\))\s*!")
 _FALLBACK_FACTORIAL_CALL = re.compile(r"\b(factorial|binomial)\s*\(\s*(\d*)\s*[,)]?")
 
 
-def _check_fallback_cost(expression: str) -> None:
-    powers = list(_FALLBACK_POWER.finditer(expression))
-    for match in powers:
+def _check_fallback_powers(expression: str) -> None:
+    for match in _FALLBACK_POWER.finditer(expression):
         literal = match.group(3)
+        rest = expression[match.end():].lstrip()
         if not literal:
-            # The exponent is a name or a bracketed expression.
-            after = expression[match.end():].lstrip()
-            if after[:1] == "(" or not after[:1].isalpha():
+            # The exponent must be a name, not a bracketed expression.
+            if not rest[:1].isalpha():
                 raise SafeParserError(_COST_ERROR)
             continue
         if "." not in literal and int(literal) > MAX_FACTORIAL_ARGUMENT:
             raise SafeParserError(_COST_ERROR)
-        rest = expression[match.end():].lstrip()
-        if rest.startswith("**") or rest.startswith("^"):
+        if rest.startswith(("**", "^")):
             raise SafeParserError(_COST_ERROR)  # a power tower
+
+
+def _check_fallback_factorials(expression: str) -> None:
     for match in _FALLBACK_FACTORIAL.finditer(expression):
         operand = match.group(1)
-        if operand == ")" or (operand.isdigit() and int(operand) > MAX_FACTORIAL_ARGUMENT):
+        if operand == ")":
+            raise SafeParserError(_COST_ERROR)
+        if operand.isdigit() and int(operand) > MAX_FACTORIAL_ARGUMENT:
             raise SafeParserError(_COST_ERROR)
     for match in _FALLBACK_FACTORIAL_CALL.finditer(expression):
         literal = match.group(2)
         if not literal or int(literal) > MAX_FACTORIAL_ARGUMENT:
             raise SafeParserError(_COST_ERROR)
+
+
+def _check_fallback_cost(expression: str) -> None:
+    _check_fallback_powers(expression)
+    _check_fallback_factorials(expression)
+
 
 _DENYLIST_PATTERN = re.compile(
     r"(?:"
