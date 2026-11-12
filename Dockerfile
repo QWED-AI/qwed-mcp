@@ -1,4 +1,8 @@
 
+# ghcr.io/astral-sh/uv:0.11.3, as a build stage pinned by digest (a tag can
+# be moved to another image). The builder copies the uv binary from it.
+FROM ghcr.io/astral-sh/uv@sha256:90bbb3c16635e9627f49eec6539f956d70746c409209041800a0280b93152823 AS uv
+
 # ubuntu:24.04 (noble-20260410)
 FROM ubuntu@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff AS builder
 
@@ -6,16 +10,31 @@ WORKDIR /app
 
 # Install Python 3.14 from Deadsnakes PPA on a safe OS (bypasses Debian 12 zlib CVEs).
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common build-essential && \
-    add-apt-repository ppa:deadsnakes/ppa -y && \
+# No APT download retries: a retried download is the path the apt advisory
+# fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
+# No APT_REFRESH here: this stage is not shipped, and refreshing it daily
+# would rebuild the dependency and wheel layers below every day.
+# The deadsnakes PPA signing key is kept in the repository and pinned by
+# hash (fingerprint F23C5A6CF475977595C89F51BA6932366A755776). apt trusts it
+# for this one source only (signed-by), and the build does not depend on the
+# Launchpad API that add-apt-repository calls.
+COPY docker/deadsnakes-ppa.asc /etc/apt/keyrings/deadsnakes.asc
+RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates build-essential && \
+    printf '%s  %s\n' \
+    81d7d4b75f5592f0070e3137ae15d149a44a64d4f91e22defc3800d759eadbde \
+    /etc/apt/keyrings/deadsnakes.asc | sha256sum -c - && \
+    echo 'deb [signed-by=/etc/apt/keyrings/deadsnakes.asc]' \
+    'https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble main' \
+    > /etc/apt/sources.list.d/deadsnakes.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     python3.14 python3.14-venv && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy uv binary from official image — avoids pipe-to-shell (QWED shell_safety)
-COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /usr/local/bin/uv
+COPY --from=uv /uv /usr/local/bin/uv
 
 RUN uv venv --python 3.14 /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
@@ -51,18 +70,37 @@ WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install Python 3.14 runtime on pristine Ubuntu 24.04.
-# software-properties-common is needed only for add-apt-repository; purge it
-# afterwards to remove transitive system python3-cryptography (41.0.7) and
-# python3-jwt (2.7.0) that Docker Scout flags as vulnerable.
-# Our app uses venv-installed cryptography>=48.0.0 and PyJWT>=2.12.0.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common && \
-    add-apt-repository ppa:deadsnakes/ppa -y && \
+# software-properties-common (add-apt-repository) is not installed, so the
+# system python3-cryptography and python3-jwt that Docker Scout flags never
+# enter the image. Our app uses venv-installed cryptography>=48.0.0 and
+# PyJWT>=2.12.0.
+# The deadsnakes PPA signing key is kept in the repository and pinned by
+# hash (fingerprint F23C5A6CF475977595C89F51BA6932366A755776). apt trusts it
+# for this one source only (signed-by), and the build does not depend on the
+# Launchpad API that add-apt-repository calls.
+# apt-get upgrade applies Ubuntu security updates released after the pinned
+# base image (for example apt 2.8.4ubuntu0.1, which the image scanners flag).
+# No APT download retries: a retried download is the path the apt advisory
+# fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
+# APT_REFRESH (the date, set by the workflow) rebuilds this shipped layer
+# once a day, so cached builds still get Ubuntu security updates.
+ARG APT_REFRESH=none
+COPY docker/deadsnakes-ppa.asc /etc/apt/keyrings/deadsnakes.asc
+RUN echo "apt refresh: ${APT_REFRESH}" && \
+    echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates && \
+    printf '%s  %s\n' \
+    81d7d4b75f5592f0070e3137ae15d149a44a64d4f91e22defc3800d759eadbde \
+    /etc/apt/keyrings/deadsnakes.asc | sha256sum -c - && \
+    echo 'deb [signed-by=/etc/apt/keyrings/deadsnakes.asc]' \
+    'https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble main' \
+    > /etc/apt/sources.list.d/deadsnakes.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     python3.14 && \
+    apt-get upgrade -y --no-install-recommends && \
     dpkg-query -W -f='${Package} ${Version}\n' > /var/log/apt-upgraded-packages.txt && \
-    apt-get purge -y --auto-remove software-properties-common && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv

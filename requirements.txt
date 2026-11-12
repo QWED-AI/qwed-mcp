@@ -1,9 +1,7 @@
-cryptography>=46.0.5
+anyio>=4.5,<5
 mcp>=1.30.0,<2
-PyJWT>=2.13.0
 sympy>=1.12
 z3-solver>=4.12.0.0
-httpx>=0.27.0
-qwed-finance>=1.2.0
-qwed-ucp>=0.2.0
 sentry-sdk>=2.13.0
+cryptography>=46.0.5
+PyJWT>=2.13.0
