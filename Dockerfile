@@ -8,7 +8,9 @@ WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 # No APT download retries: a retried download is the path the apt advisory
 # fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
-RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
+ARG APT_REFRESH=none
+RUN echo "apt refresh: ${APT_REFRESH}" && \
+    echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
     apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common build-essential && \
     add-apt-repository ppa:deadsnakes/ppa -y && \
@@ -18,7 +20,8 @@ RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy uv binary from official image — avoids pipe-to-shell (QWED shell_safety)
-COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /usr/local/bin/uv
+# Pinned by digest as well as tag: a tag can be moved to another image.
+COPY --from=ghcr.io/astral-sh/uv:0.11.3@sha256:90bbb3c16635e9627f49eec6539f956d70746c409209041800a0280b93152823 /uv /usr/local/bin/uv
 
 RUN uv venv --python 3.14 /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
@@ -62,7 +65,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # base image (for example apt 2.8.4ubuntu0.1, which the image scanners flag).
 # No APT download retries: a retried download is the path the apt advisory
 # fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
-RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
+ARG APT_REFRESH=none
+RUN echo "apt refresh: ${APT_REFRESH}" && \
+    echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
     apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common && \
     add-apt-repository ppa:deadsnakes/ppa -y && \
