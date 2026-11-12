@@ -6,6 +6,9 @@ WORKDIR /app
 
 # Install Python 3.14 from Deadsnakes PPA on a safe OS (bypasses Debian 12 zlib CVEs).
 ENV DEBIAN_FRONTEND=noninteractive
+# No APT download retries: a retried download is the path the apt advisory
+# fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
+RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common build-essential && \
     add-apt-repository ppa:deadsnakes/ppa -y && \
@@ -49,6 +52,9 @@ FROM ubuntu@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5
 WORKDIR /app
 
 ENV DEBIAN_FRONTEND=noninteractive
+# No APT download retries: a retried download is the path the apt advisory
+# fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
+RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries
 
 # Install Python 3.14 runtime on pristine Ubuntu 24.04.
 # software-properties-common is needed only for add-apt-repository; purge it
