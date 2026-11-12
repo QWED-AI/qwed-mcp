@@ -114,6 +114,8 @@ TABLE_REFUSED = [
     ("SELECT * FROM `hidden_users`", ["users"], None),
     ("SELECT * FROM users JOIN secret ON secret.id = users.id", ["users"], None),
     ("WITH users AS (SELECT * FROM secret) SELECT * FROM users", ["users"], None),
+    # a CTE named after the stored table it reads does not hide that read
+    ("WITH secret AS (SELECT * FROM secret) SELECT * FROM secret", ["users"], None),
 ]
 
 
@@ -144,3 +146,4 @@ def test_extract_tables_returns_the_table_part():
     assert extract_tables("SELECT * FROM db.schema.users") == ["users"]
     assert extract_tables("SELECT * FROM `t`", dialect="mysql") == ["t"]
     assert extract_tables("not sql at all") == []
+    assert extract_tables("WITH t AS (SELECT * FROM t) SELECT * FROM t") == ["t"]

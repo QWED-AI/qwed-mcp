@@ -128,6 +128,43 @@ def sql_issues(
     return list(dict.fromkeys(issues))
 
 
+_CLOSERS = {"'": "'", '"': '"', "`": "`", "[": "]"}
+
+
+def _quoted_end(query: str, start: int):
+    """The index after the quoted string or identifier opening at
+    ``start``, or an issue when it is unterminated or holds a backslash."""
+    opener = query[start]
+    closer = _CLOSERS[opener]
+    j = start + 1
+    while j < len(query):
+        if opener in "'\"" and query[j] == "\\":
+            return "Backslash inside a string literal is not admitted"
+        if query[j] != closer:
+            j += 1
+        elif opener != "[" and query.startswith(closer * 2, j):
+            j += 2  # a doubled quote is an escaped quote
+        else:
+            return j + 1
+    return "Unterminated quoted string or identifier"
+
+
+def _comment_end(query: str, start: int):
+    """The index after a comment starting at ``start`` (None when there is
+    none), or an issue for a comment form databases read differently."""
+    if query.startswith("--", start):
+        following = query[start + 2 : start + 3]
+        if following and not following.isspace():
+            return "'--' not followed by whitespace is not admitted"
+        newline = query.find("\n", start)
+        return len(query) if newline == -1 else newline + 1
+    if query.startswith("/*", start):
+        return "Block comment is not admitted"
+    if query[start] == "#":
+        return "'#' outside a string is not admitted"
+    return None
+
+
 def _lexical_issues(query: str) -> List[str]:
     """Comment and quoting forms that databases do not read the same way.
 
@@ -137,37 +174,17 @@ def _lexical_issues(query: str) -> List[str]:
     comment, and a backslash inside a quoted string because only some
     databases read it as an escape.
     """
-    closers = {"'": "'", '"': '"', "`": "`", "[": "]"}
-    i, n = 0, len(query)
-    while i < n:
-        ch = query[i]
-        if ch in closers:
-            closer = closers[ch]
-            j = i + 1
-            while True:
-                if j >= n:
-                    return ["Unterminated quoted string or identifier"]
-                if ch in "'\"" and query[j] == "\\":
-                    return ["Backslash inside a string literal is not admitted"]
-                if query[j] == closer:
-                    if j + 1 < n and query[j + 1] == closer and ch != "[":
-                        j += 2  # doubled quote is an escaped quote
-                        continue
-                    break
-                j += 1
-            i = j + 1
-            continue
-        if query.startswith("--", i):
-            if i + 2 < n and not query[i + 2].isspace():
-                return ["'--' not followed by whitespace is not admitted"]
-            newline = query.find("\n", i)
-            i = n if newline == -1 else newline + 1
-            continue
-        if query.startswith("/*", i):
-            return ["Block comment is not admitted"]
-        if ch == "#":
-            return ["'#' outside a string is not admitted"]
-        i += 1
+    i = 0
+    while i < len(query):
+        if query[i] in _CLOSERS:
+            step = _quoted_end(query, i)
+        else:
+            step = _comment_end(query, i)
+            if step is None:
+                step = i + 1
+        if isinstance(step, str):
+            return [step]
+        i = step
     return []
 
 
@@ -248,17 +265,34 @@ def _function_issues(root: exp.Expression) -> List[str]:
     ]
 
 
+def _cte_names(root: exp.Expression) -> set:
+    return {cte.alias.lower() for cte in root.find_all(exp.CTE) if cte.alias}
+
+
+def _is_cte_reference(table: exp.Table, cte_names: set) -> bool:
+    """Whether ``table`` names a CTE rather than a stored table: it is
+    unqualified, a CTE has its name, and it is not inside the body of that
+    CTE (``WITH t AS (SELECT * FROM t)`` reads the stored table ``t``)."""
+    name = table.name.lower()
+    if table.args.get("db") or table.args.get("catalog") or name not in cte_names:
+        return False
+    node = table.parent
+    while node is not None:
+        if isinstance(node, exp.CTE) and (node.alias or "").lower() == name:
+            return False
+        node = node.parent
+    return True
+
+
 def _table_issues(root: exp.Expression, allowed_tables: List[str]) -> List[str]:
     allowed = {name.strip().lower() for name in allowed_tables if name and name.strip()}
-    cte_names = {cte.alias.lower() for cte in root.find_all(exp.CTE) if cte.alias}
+    cte_names = _cte_names(root)
     unauthorized = []
     for table in root.find_all(exp.Table):
         name = table.name
         if not name:
             return ["Could not determine an accessed table: no assurance produced"]
-        if name.lower() in cte_names and not (
-            table.args.get("db") or table.args.get("catalog")
-        ):
+        if _is_cte_reference(table, cte_names):
             continue
         qualified = ".".join(
             part.name for part in table.parts if isinstance(part, exp.Identifier)
@@ -281,8 +315,8 @@ def extract_tables(query: str, dialect: Optional[str] = None) -> List[str]:
     for statement in statements:
         if statement is None:
             continue
-        cte_names = {cte.alias for cte in statement.find_all(exp.CTE) if cte.alias}
+        cte_names = _cte_names(statement)
         for table in statement.find_all(exp.Table):
-            if table.name and table.name not in cte_names:
+            if table.name and not _is_cte_reference(table, cte_names):
                 names.add(table.name)
     return sorted(names)
