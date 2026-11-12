@@ -395,10 +395,12 @@ def _collapse_bits(node: ast.AST, values: dict, bounds: dict) -> int:
             return min(max(left, right) + 1, _BOUND_CAP)
         if isinstance(node.op, ast.Pow):
             return min(left * 2 ** min(right, 64), _BOUND_CAP)
-        if isinstance(node.op, ast.Div) and isinstance(
-            values.get(id(node.right)), Fraction
-        ):
-            return left  # dividing by a known constant does not grow it
+        divisor = values.get(id(node.right))
+        if isinstance(node.op, ast.Div) and isinstance(divisor, Fraction):
+            # Dividing by p/q multiplies by q/p, so the value can grow by
+            # up to the bits of q: (x - x + 1)/(1/10**9) is 10**9.
+            grow = divisor.denominator.bit_length()
+            return min(left + grow, _BOUND_CAP)
         return min(left + right, _BOUND_CAP)
     if isinstance(node, ast.Call):
         name = node.func.id if isinstance(node.func, ast.Name) else ""

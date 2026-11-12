@@ -202,6 +202,10 @@ def test_premises_must_be_a_list_of_strings():
         "factorial(x - x + 100000000)",
         "binomial(x - x + 100000000, 5)",
         "2**exp(100*log(2) + x - x)",
+        # dividing by a small known fraction grows the value
+        "2**((x - x + 1)/(1/10**9))",
+        "2**((x - x + 1)/Rational(1, 10**9))",
+        "factorial((x - x + 1)/(1/10**8))",
     ],
 )
 def test_expression_beyond_cost_bound_is_refused_quickly(expression):
@@ -220,6 +224,7 @@ def test_expression_beyond_cost_bound_is_refused_quickly(expression):
         "1**(10**100)",
         "factorial(10)",
         "x**(1/2)",
+        "2**((x + 1)/(1/2))",
         "(x+1)**3",
         "2x**3",
         "5!",
