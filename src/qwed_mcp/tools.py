@@ -49,22 +49,21 @@ async def _kill_process(proc: asyncio.subprocess.Process) -> None:
             try:
                 proc.kill()
             except ProcessLookupError:
-                pass
+                logger.debug("Process already terminated before proc.kill()")
     else:
         try:
             proc.kill()
-        except OSError:
-            pass
-    
+        except OSError as e:
+            logger.debug(f"proc.kill() failed: {e}")
+
     try:
         await asyncio.wait_for(proc.wait(), timeout=2.0)
     except asyncio.TimeoutError:
-        pass
+        logger.debug("Process did not exit within 2 seconds of the kill")
 
 def _close_streams(proc: asyncio.subprocess.Process) -> None:
     """Explicitly close process streams to prevent FD leaks."""
-    for stream_name in ('stdout', 'stderr', 'stdin'):
-        stream = getattr(proc, stream_name, None)
+    for stream in (proc.stdout, proc.stderr, proc.stdin):
         if stream:
             transport = getattr(stream, '_transport', None)
             if transport is not None:
@@ -77,8 +76,8 @@ def _handle_cap_exceeded(proc: asyncio.subprocess.Process | None) -> None:
     if proc:
         try:
             proc.kill()
-        except OSError:
-            pass
+        except OSError as e:
+            logger.debug(f"proc.kill() after the output cap failed: {e}")
 
 async def _read_stream(stream: asyncio.StreamReader | None, proc: asyncio.subprocess.Process | None = None, cap_bytes: int = 1024 * 1024) -> bytes:
     """Read from an async stream up to a maximum byte cap to prevent OOM. Kills process if cap is reached."""
