@@ -123,7 +123,7 @@ def sql_issues(
     issues.extend(_statement_issues(root))
     issues.extend(_condition_issues(root))
     issues.extend(_function_issues(root))
-    if allowed_tables:
+    if allowed_tables is not None:
         issues.extend(_table_issues(root, allowed_tables))
     return list(dict.fromkeys(issues))
 
@@ -230,7 +230,7 @@ def _data_free(node: exp.Expression) -> bool:
 
 def _self_comparison(node: exp.Expression) -> bool:
     """``x = x`` and the like: true for every row where x is not NULL."""
-    if isinstance(node, (exp.EQ, exp.GTE, exp.LTE)):
+    if isinstance(node, (exp.EQ, exp.GTE, exp.LTE, exp.NullSafeEQ)):
         return node.this == node.expression
     return False
 
@@ -284,6 +284,19 @@ def _is_cte_reference(table: exp.Table, cte_names: set) -> bool:
     return True
 
 
+def _table_allowed(table: exp.Table, allowed: set) -> bool:
+    """Whether ``table`` is in ``allowed`` (lower-case names), by its table
+    part or its full qualified name. An unquoted identifier is compared
+    case-insensitively; a quoted one keeps its case, since databases such
+    as PostgreSQL treat "Users" and users as different tables."""
+    parts = [part for part in table.parts if isinstance(part, exp.Identifier)]
+
+    def spelling(selected) -> str:
+        return ".".join(p.name if p.quoted else p.name.lower() for p in selected)
+
+    return bool({spelling(parts[-1:]), spelling(parts)} & allowed)
+
+
 def _table_issues(root: exp.Expression, allowed_tables: List[str]) -> List[str]:
     allowed = {name.strip().lower() for name in allowed_tables if name and name.strip()}
     cte_names = _cte_names(root)
@@ -294,10 +307,10 @@ def _table_issues(root: exp.Expression, allowed_tables: List[str]) -> List[str]:
             return ["Could not determine an accessed table: no assurance produced"]
         if _is_cte_reference(table, cte_names):
             continue
-        qualified = ".".join(
-            part.name for part in table.parts if isinstance(part, exp.Identifier)
-        ).lower()
-        if name.lower() not in allowed and qualified not in allowed:
+        if not _table_allowed(table, allowed):
+            qualified = ".".join(
+                part.name for part in table.parts if isinstance(part, exp.Identifier)
+            )
             unauthorized.append(qualified or name)
     if unauthorized:
         return [f"Unauthorized table access: {', '.join(sorted(set(unauthorized)))}"]

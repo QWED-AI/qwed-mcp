@@ -147,3 +147,22 @@ def test_extract_tables_returns_the_table_part():
     assert extract_tables("SELECT * FROM `t`", dialect="mysql") == ["t"]
     assert extract_tables("not sql at all") == []
     assert extract_tables("WITH t AS (SELECT * FROM t) SELECT * FROM t") == ["t"]
+
+
+def test_empty_allowlist_admits_no_table():
+    result = verify_sql_query("SELECT * FROM secret", allowed_tables=[])
+    assert result["verified"] is False
+
+
+def test_null_safe_self_comparison_is_refused():
+    query = "UPDATE users SET is_admin = 1 WHERE id IS NOT DISTINCT FROM id"
+    assert verify_sql_query(query, dialect="postgres")["verified"] is False
+
+
+def test_quoted_table_name_keeps_its_case():
+    allowed = ["users"]
+    query = 'SELECT * FROM "Users"'
+    assert verify_sql_query(query, allowed, dialect="postgres")["verified"] is False
+    query = 'SELECT * FROM "users"'
+    assert verify_sql_query(query, allowed, dialect="postgres")["verified"] is True
+    assert verify_sql_query("SELECT * FROM Users", allowed)["verified"] is True
