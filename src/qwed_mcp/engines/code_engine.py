@@ -1,59 +1,41 @@
 """
 Code Security Verification Engine
 
-Uses AST analysis for detecting dangerous patterns.
+Python code is admitted only when every module, builtin and attribute it uses
+is on an allowlist (see ``python_allowlist``). JavaScript is pattern-scanned
+only and is never admitted.
 """
 
 import ast
+import codecs
 import re
 import logging
 from typing import List
 
+from .python_allowlist import admission_issues
+
 logger = logging.getLogger("qwed-mcp.engines.code")
 
-_DANGEROUS_IMPORT_MODULES = {"subprocess"}
-_DANGEROUS_IMPORTED_MEMBERS = {
-    ("os", "system"),
-    ("os", "popen"),
-    ("pickle", "loads"),
-    ("marshal", "loads"),
-}
-_DANGEROUS_CALLS = {
-    "eval",
-    "exec",
-    "compile",
-    "open",
-    "__import__",
-    "os.system",
-    "os.popen",
-    "pickle.loads",
-    "marshal.loads",
-}
-_DANGEROUS_BARE_NAMES = {"__import__"}
-
-# Dangerous patterns for Python
-DANGEROUS_PYTHON_PATTERNS = [
-    "eval",
-    "exec",
-    "__import__",
-    "compile",
-    "os.system",
-    "os.popen",
-    "subprocess",
-    "pickle.loads",
-    "marshal.loads",
-]
-
-# Dangerous patterns for JavaScript
+# Dangerous patterns for JavaScript, as regular expressions. Compiled when the
+# module loads, so a pattern that does not compile fails at import and cannot
+# ship silently (#61).
 DANGEROUS_JS_PATTERNS = [
-    "eval(",
-    "Function(",
-    "setTimeout(.*string",
-    "setInterval(.*string",
-    "document.write",
-    "innerHTML",
-    "outerHTML",
+    re.escape("eval("),
+    re.escape("Function("),
+    r"setTimeout\s*\(\s*['\"`]",
+    r"setInterval\s*\(\s*['\"`]",
+    re.escape("document.write"),
+    re.escape("innerHTML"),
+    re.escape("outerHTML"),
 ]
+_COMPILED_JS_PATTERNS = [
+    (pattern, re.compile(pattern, re.IGNORECASE)) for pattern in DANGEROUS_JS_PATTERNS
+]
+
+JAVASCRIPT_NOT_ADMITTED = (
+    "JavaScript is only pattern-scanned, so it is never admitted: "
+    "no assurance produced"
+)
 
 # SQL injection patterns
 SQL_INJECTION_PATTERNS = [
@@ -68,191 +50,153 @@ SQL_INJECTION_PATTERNS = [
 ]
 
 
-def verify_code_safety(
-    code: str,
-    language: str
-) -> dict:
+def verify_code_safety(code: str, language: str) -> dict:
     """
-    Verify code for security issues using AST analysis.
-    
+    Verify code for security issues.
+
     Args:
         code: The code to analyze
         language: Programming language ("python", "javascript", "sql")
-    
+
     Returns:
-        Verification result with security issues if any
+        Verification result with security issues if any. ``verified`` is True
+        only when the code was analysed and admitted.
     """
-    issues = []
-    
-    if language.lower() == "python":
+    if not isinstance(code, str) or not code.strip():
+        return {
+            "verified": False,
+            "message": "Empty code: nothing was analysed, no assurance produced",
+            "issues": ["Code is empty or whitespace only"],
+        }
+    if not isinstance(language, str):
+        return {
+            "verified": False,
+            "message": f"Unsupported language: {language!r}",
+            "issues": [f"Language {language!r} is not supported"],
+        }
+
+    language = language.lower()
+    if language == "python":
         issues = analyze_python(code)
-    elif language.lower() == "javascript":
-        issues = analyze_javascript(code)
-    elif language.lower() == "sql":
+    elif language == "javascript":
+        return {
+            "verified": False,
+            "message": JAVASCRIPT_NOT_ADMITTED,
+            "issues": analyze_javascript(code) + [JAVASCRIPT_NOT_ADMITTED],
+        }
+    elif language == "sql":
         issues = analyze_sql(code)
     else:
         return {
             "verified": False,
             "message": f"Unsupported language: {language}",
-            "issues": [f"Language '{language}' is not supported"]
+            "issues": [f"Language '{language}' is not supported"],
         }
-    
+
     if issues:
         return {
             "verified": False,
             "message": f"Found {len(issues)} security issue(s)",
-            "issues": issues
+            "issues": issues,
         }
-    else:
-        return {
-            "verified": True,
-            "message": "No security issues detected",
-            "issues": []
-        }
+    return {
+        "verified": True,
+        "message": "No security issues detected",
+        "issues": [],
+    }
+
+
+# PEP 263 coding declaration: a comment line naming a codec.
+_CODING_DECLARATION = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)")
+
+
+def _candidate_lines(code: str) -> set:
+    """The first two lines of ``code`` under each way of splitting it.
+
+    The interpreter reads a declaration only on the first two lines of the
+    file. str.splitlines() breaks lines at characters (form feed, U+001C to
+    U+001E, U+2028) where the tokenizer does not, and a lone carriage return
+    may or may not end a line, so the first two lines are taken under each
+    split and all of them are checked.
+    """
+    lines = set(code.splitlines()[:2])
+    lines.update(code.split("\n")[:2])
+    lines.update(re.split(r"\r\n|\r|\n", code)[:2])
+    return lines
+
+
+def _source_encoding_issues(code: str) -> List[str]:
+    """Refuse a source encoding declaration other than UTF-8.
+
+    The checks below read ``code`` as text, but the interpreter decodes the
+    script file it is written to by its coding declaration. Under any other
+    codec the code that runs would not be the code that was checked.
+    """
+    for line in sorted(_candidate_lines(code)):
+        match = _CODING_DECLARATION.match(line)
+        if not match:
+            continue
+        try:
+            codec = codecs.lookup(match.group(1)).name
+        except LookupError:
+            codec = ""
+        if codec != "utf-8":
+            return [
+                f"Source encoding declaration '{match.group(1)}' is not admitted "
+                "(only UTF-8)"
+            ]
+    return []
 
 
 def analyze_python(code: str) -> List[str]:
-    """Analyze Python code for security issues."""
-    issues = []
-    ast_parsed_successfully = False
-    module_aliases: dict[str, str] = {}
-    imported_name_aliases: dict[str, str] = {}
-    
-    # Try AST analysis
+    """Why Python ``code`` is not admitted; an empty list when it is."""
+    encoding_issues = _source_encoding_issues(code)
+    if encoding_issues:
+        return encoding_issues
     try:
         tree = ast.parse(code)
-        ast_parsed_successfully = True
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    imported_name = alias.name
-                    alias_name = alias.asname or imported_name.split(".")[0]
-                    module_aliases[alias_name] = imported_name
-                    if any(
-                        imported_name == module
-                        or imported_name.startswith(f"{module}.")
-                        for module in _DANGEROUS_IMPORT_MODULES
-                    ):
-                        issues.append(
-                            f"Dangerous import detected: {imported_name}"
-                        )
-
-            if isinstance(node, ast.ImportFrom):
-                module_name = node.module or ""
-                if any(
-                    module_name == module
-                    or module_name.startswith(f"{module}.")
-                    for module in _DANGEROUS_IMPORT_MODULES
-                ):
-                    issues.append(
-                        f"Dangerous import detected: from {module_name} import ..."
-                    )
-                for alias in node.names:
-                    alias_name = alias.asname or alias.name
-                    imported_name_aliases[alias_name] = f"{module_name}.{alias.name}"
-                    if (module_name, alias.name) in _DANGEROUS_IMPORTED_MEMBERS:
-                        issues.append(
-                            f"Dangerous import detected: from {module_name} import {alias.name}"
-                        )
-        
-        for node in ast.walk(tree):
-            # Check for dangerous function calls
-            if isinstance(node, ast.Call):
-                resolved_name = resolve_call_name(
-                    node.func,
-                    module_aliases=module_aliases,
-                    imported_name_aliases=imported_name_aliases,
-                )
-                if _is_dangerous_call_name(resolved_name):
-                    issues.append(f"Dangerous function call: {resolved_name}()")
-
-            if isinstance(node, ast.Name) and node.id in _DANGEROUS_BARE_NAMES:
-                issues.append(f"Dangerous name reference detected: {node.id}")
-                
     except SyntaxError as e:
-        issues.append(f"Syntax error in code: {e}")
-    
-    # Fall back to raw pattern checks only if AST parsing failed.
-    if not ast_parsed_successfully:
-        for pattern in DANGEROUS_PYTHON_PATTERNS:
-            if pattern in code:
-                issues.append(f"Potentially dangerous pattern: {pattern}")
+        return [f"Syntax error in code: {e}"]
+    except (ValueError, RecursionError, MemoryError) as e:
+        return [f"Code could not be parsed: {type(e).__name__}"]
+    if not tree.body:
+        return ["Code has no statements: nothing was analysed, no assurance produced"]
 
-        if re.search(r"\bopen\s*\(", code):
-            issues.append("Potentially dangerous pattern: open()")
-    
-    return list(set(issues))
+    try:
+        issues = admission_issues(tree)
+    except RecursionError:
+        return ["Code is nested too deeply to analyse"]
+    # Keep the order stable and drop repeats.
+    return list(dict.fromkeys(issues))
 
 
 def analyze_javascript(code: str) -> List[str]:
-    """Analyze JavaScript code for security issues."""
-    issues = []
-    
-    for pattern in DANGEROUS_JS_PATTERNS:
-        if re.search(pattern, code, re.IGNORECASE):
-            issues.append(f"Dangerous pattern detected: {pattern}")
-    
-    # Check for potential XSS
+    """Pattern findings for JavaScript. Finding none is not an assurance."""
+    issues = [
+        f"Dangerous pattern detected: {pattern}"
+        for pattern, compiled in _COMPILED_JS_PATTERNS
+        if compiled.search(code)
+    ]
+
     if re.search(r"innerHTML\s*=", code):
         issues.append("Potential XSS: Direct innerHTML assignment")
-    
+
     if re.search(r"document\.write\s*\(", code):
         issues.append("Potential XSS: document.write usage")
-    
-    return list(set(issues))
+
+    return issues
 
 
 def analyze_sql(code: str) -> List[str]:
     """Analyze SQL for injection vulnerabilities."""
     issues = []
-    
+
     for pattern in SQL_INJECTION_PATTERNS:
         if re.search(pattern, code, re.IGNORECASE):
             issues.append(f"Potential SQL injection: Pattern '{pattern}' detected")
-    
+
     # Check for string concatenation patterns (common in injection)
     if re.search(r"\+\s*['\"]", code) or re.search(r"['\"\s]\+", code):
         issues.append("Warning: String concatenation in SQL query detected")
-    
+
     return list(set(issues))
-
-
-def get_attr_name(node) -> str:
-    """Get the full attribute name from an AST node."""
-    if isinstance(node, ast.Attribute):
-        return f"{get_attr_name(node.value)}.{node.attr}"
-    elif isinstance(node, ast.Name):
-        return node.id
-    return ""
-
-
-def resolve_call_name(
-    node: ast.AST,
-    *,
-    module_aliases: dict[str, str],
-    imported_name_aliases: dict[str, str],
-) -> str:
-    """Resolve a function call name including common import aliases."""
-    if isinstance(node, ast.Name):
-        return imported_name_aliases.get(node.id, node.id)
-
-    if isinstance(node, ast.Attribute):
-        full_name = get_attr_name(node)
-        root, separator, remainder = full_name.partition(".")
-        if not separator:
-            return full_name
-        resolved_root = imported_name_aliases.get(root, module_aliases.get(root, root))
-        return f"{resolved_root}.{remainder}"
-
-    return ""
-
-
-def _is_dangerous_call_name(resolved_name: str) -> bool:
-    """Return True when a resolved call target is explicitly dangerous."""
-    if resolved_name in _DANGEROUS_CALLS:
-        return True
-    return any(
-        resolved_name == module or resolved_name.startswith(f"{module}.")
-        for module in _DANGEROUS_IMPORT_MODULES
-    )
