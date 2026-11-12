@@ -60,6 +60,11 @@ def track_verification(tool_name: str, result: dict):
             sentry_sdk.set_context("verification_details", result)
 
 
+def _log_text(value: object) -> str:
+    """Text from a manifest, safe to put on one log line."""
+    return "".join(ch if ch.isprintable() else repr(ch)[1:-1] for ch in str(value))
+
+
 def verify_server_skills():
     """Verify any skills defined in the environment before starting."""
     manifest_path = os.getenv("QWED_SKILL_MANIFEST")
@@ -83,11 +88,12 @@ def verify_server_skills():
             sys.exit(1)
 
         logger.info(
-            f"Skill '{result.get('skill_name', 'unknown')}' passed provenance "
-            f"checks (status: {result.get('status')})."
+            "Skill '%s' passed provenance checks (status: %s).",
+            _log_text(result.get("skill_name", "unknown")),
+            _log_text(result.get("status")),
         )
         for advisory in result.get("advisories", []):
-            logger.info(f"Skill provenance advisory: {advisory}")
+            logger.info("Skill provenance advisory: %s", _log_text(advisory))
     except Exception as e:
         logger.error(f"FATAL: Failed to read or parse skill manifest: {e}")
         sys.exit(1)
