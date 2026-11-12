@@ -198,6 +198,13 @@ SELF_COMPARISON_FORMS = [
     ("SELECT * FROM users WHERE users.id = id", None),
     ("SELECT * FROM users u WHERE id >= u.id", None),
     ("UPDATE users SET admin = 1 WHERE users.id = id", None),
+    # a subquery with no table reads the outer row: id is u.id
+    (
+        "UPDATE users AS u SET is_admin = TRUE "
+        "WHERE id = :id OR EXISTS (SELECT 1 WHERE id = u.id)",
+        "postgres",
+    ),
+    ("SELECT * FROM users u WHERE EXISTS (SELECT 1 WHERE id = u.id)", None),
     # a comparison that is false for every row, negated
     ("SELECT * FROM users WHERE NOT (id <> id)", None),
     ("SELECT * FROM users WHERE NOT id < id", None),
@@ -397,6 +404,9 @@ def test_snowflake_folds_unquoted_names_to_upper_case():
         "UPDATE users SET is_admin = TRUE WHERE id = :id OR (SELECT COUNT(*)) = 1",
         "SELECT * FROM users WHERE id = 7 OR EXISTS (SELECT 1 FROM orders)",
         "SELECT * FROM users WHERE id = 7 OR 1 IN (SELECT 1)",
+        # o.id belongs to the subquery that reads orders, not to the outer row
+        "SELECT * FROM users WHERE id = 7 OR EXISTS (SELECT 1 FROM orders o "
+        "WHERE EXISTS (SELECT 1 FROM items i WHERE i.oid = o.id))",
     ],
 )
 def test_condition_that_does_not_depend_on_the_row_is_refused(query):
@@ -407,6 +417,8 @@ def test_correlated_and_column_subqueries_are_admitted():
     queries = [
         "SELECT * FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id)",
         "SELECT * FROM users WHERE id IN (SELECT user_id FROM orders WHERE total > 10)",
+        "SELECT * FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE EXISTS "
+        "(SELECT 1 FROM items i WHERE i.oid = o.id AND i.uid = u.id))",
     ]
     for query in queries:
         assert verify_sql_query(query)["verified"] is True, query

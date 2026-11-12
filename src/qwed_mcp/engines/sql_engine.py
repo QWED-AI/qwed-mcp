@@ -334,7 +334,21 @@ def _row_independent(node: exp.Expression) -> bool:
     counts as the subquery's own."""
     if any(isinstance(n, _ROW_NODES) for n in _outside_subqueries(node)):
         return False
-    return not any(_correlated(select) for select in node.find_all(exp.Select))
+    return not any(_correlated(select) for select in _outermost_selects(node))
+
+
+def _outermost_selects(node: exp.Expression) -> Iterable[exp.Select]:
+    """The subqueries of ``node`` that no other subquery of ``node``
+    contains. A column of a deeper subquery that refers to one of these
+    (i.oid = o.id) does not refer to the row ``node`` is tested on."""
+    for select in node.find_all(exp.Select):
+        parent = select.parent
+        while parent is not None and parent is not node:
+            if isinstance(parent, exp.Select):
+                break
+            parent = parent.parent
+        else:
+            yield select
 
 
 # Comparisons whose result is the same for every row when both sides are
@@ -377,9 +391,9 @@ def _self_comparison(node: exp.Expression, dialect: Optional[str] = None) -> boo
 
     The operands are compared as the database reads them, so ``id = (id)``
     and ``ID = id`` count too. A column qualified on one side only is the
-    same column when its table belongs to the query the comparison is in:
-    there, the unqualified name resolves first. ``id = u.id`` inside a
-    subquery that reads another table compares two columns.
+    same column when both resolve in the same query: ``id = u.id`` inside a
+    subquery that reads another table compares two columns, but inside a
+    subquery that reads no table both are the outer row's id.
     """
     if not isinstance(node, _COMPARISONS):
         return False
@@ -387,12 +401,29 @@ def _self_comparison(node: exp.Expression, dialect: Optional[str] = None) -> boo
     right = _operand_key(node.expression, dialect)
     if isinstance(left, exp.Column) and isinstance(right, exp.Column):
         if left.name == right.name and bool(left.table) != bool(right.table):
-            table = (left.table or right.table).lower()
-            scope = node.find_ancestor(exp.Select)
-            # an UPDATE or DELETE condition outside any SELECT reads the
-            # statement's own tables first
-            return scope is None or table in _own_names(scope)
+            this = _unparenthesised(node.this)
+            other = _unparenthesised(node.expression)
+            return _resolving_query(this) is _resolving_query(other)
     return left == right
+
+
+def _resolving_query(column: exp.Column) -> Optional[exp.Select]:
+    """The query a column resolves in: the nearest enclosing query that
+    defines its table (qualified), or that reads a table or names an output
+    column like it (unqualified). None when it resolves in the statement
+    itself (the tables of an UPDATE or DELETE), as a column of a subquery
+    that reads no table does."""
+    node = column.parent
+    while node is not None:
+        if isinstance(node, exp.Select):
+            names = _own_names(node)
+            if column.table:
+                if column.table.lower() in names:
+                    return node
+            elif names or column.name.lower() in _output_names(node):
+                return node
+        node = node.parent
+    return None
 
 
 def _condition_issues(root: exp.Expression, dialect: Optional[str] = None) -> List[str]:
