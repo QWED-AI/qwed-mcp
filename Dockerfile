@@ -1,4 +1,8 @@
 
+# uv, as a build stage pinned by digest as well as tag (a tag can be moved
+# to another image). The builder copies the uv binary from it.
+FROM ghcr.io/astral-sh/uv:0.11.3@sha256:90bbb3c16635e9627f49eec6539f956d70746c409209041800a0280b93152823 AS uv
+
 # ubuntu:24.04 (noble-20260410)
 FROM ubuntu@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff AS builder
 
@@ -8,9 +12,9 @@ WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 # No APT download retries: a retried download is the path the apt advisory
 # fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
-ARG APT_REFRESH=none
-RUN echo "apt refresh: ${APT_REFRESH}" && \
-    echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
+# No APT_REFRESH here: this stage is not shipped, and refreshing it daily
+# would rebuild the dependency and wheel layers below every day.
+RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
     apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common build-essential && \
     add-apt-repository ppa:deadsnakes/ppa -y && \
@@ -20,8 +24,7 @@ RUN echo "apt refresh: ${APT_REFRESH}" && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy uv binary from official image — avoids pipe-to-shell (QWED shell_safety)
-# Pinned by digest as well as tag: a tag can be moved to another image.
-COPY --from=ghcr.io/astral-sh/uv:0.11.3@sha256:90bbb3c16635e9627f49eec6539f956d70746c409209041800a0280b93152823 /uv /usr/local/bin/uv
+COPY --from=uv /uv /usr/local/bin/uv
 
 RUN uv venv --python 3.14 /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
@@ -65,6 +68,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # base image (for example apt 2.8.4ubuntu0.1, which the image scanners flag).
 # No APT download retries: a retried download is the path the apt advisory
 # fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
+# APT_REFRESH (the date, set by the workflow) rebuilds this shipped layer
+# once a day, so cached builds still get Ubuntu security updates.
 ARG APT_REFRESH=none
 RUN echo "apt refresh: ${APT_REFRESH}" && \
     echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
