@@ -272,13 +272,13 @@ Yes! The server is extensible. Fork it and add your custom `@mcp.tool()` functio
 - [x] Math engine refuses unknown operations, and expressions whose evaluation would exceed a size bound, before SymPy evaluates them
 - [x] Logic engine reports `PROVEN`, `DISPROVEN` or `UNVERIFIABLE`; a statement it cannot read is `UNVERIFIABLE`
 - [x] SQL engine parses the query with sqlglot instead of matching patterns, and the code engine's `sql` branch gives the same verdict
-- [x] Skill provenance: registries are allowlisted by default, and digests are checked against the content
-- [x] Dependencies: declares `anyio` and `sqlglot`; no longer installs `qwed-finance`, `qwed-ucp` or `httpx`
+- [x] Skill provenance: registries are allowlisted by default, and a digest is checked against the skill's content when the content is supplied. A manifest-only check, such as the server's startup check, does not prove that the content matches the digest (`digest_verified` is false)
+- [x] Dependencies: declares `anyio` and `sqlglot`; no longer installs `qwed-finance` or `qwed-ucp`; no longer declares `httpx` directly (`mcp` still installs it)
 - [x] Release pipeline: actions pinned by SHA, publishing gated on CI and image scans, Docker image with Ubuntu security updates and pinned build inputs
 
 #### Upgrading from 0.2.x
 - Code that 0.2.x ran may now be refused: anything that imports a module outside the allowlist (`os`, `pathlib`, `requests`, QWED SDK packages and other third-party packages), calls `open`, `eval`, `getattr` or another refused builtin, or reads a private or special attribute. The refusal lists the reason.
-- `qwed-finance`, `qwed-ucp` and `httpx` are no longer installed with qwed-mcp. Install them yourself if your own code imports them.
+- `qwed-finance` and `qwed-ucp` are no longer installed with qwed-mcp. Install them yourself if your own code imports them. `httpx` is no longer a direct dependency; `mcp` still installs it, but declare it in your own project if your code imports it.
 - Library users: logic results carry `verification_mode`, and the math, logic and SQL engines report input they cannot decide as refused or `UNVERIFIABLE` instead of returning a verdict for it.
 
 ### ✅ Released (v0.2.3)
