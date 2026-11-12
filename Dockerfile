@@ -1,7 +1,7 @@
 
-# uv, as a build stage pinned by digest as well as tag (a tag can be moved
-# to another image). The builder copies the uv binary from it.
-FROM ghcr.io/astral-sh/uv:0.11.3@sha256:90bbb3c16635e9627f49eec6539f956d70746c409209041800a0280b93152823 AS uv
+# ghcr.io/astral-sh/uv:0.11.3, as a build stage pinned by digest (a tag can
+# be moved to another image). The builder copies the uv binary from it.
+FROM ghcr.io/astral-sh/uv@sha256:90bbb3c16635e9627f49eec6539f956d70746c409209041800a0280b93152823 AS uv
 
 # ubuntu:24.04 (noble-20260410)
 FROM ubuntu@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff AS builder
