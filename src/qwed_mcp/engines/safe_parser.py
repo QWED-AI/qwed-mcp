@@ -395,10 +395,35 @@ def _collapse_bits(node: ast.AST, values: dict, bounds: dict) -> int:
             return min(max(left, right) + 1, _BOUND_CAP)
         if isinstance(node.op, ast.Pow):
             return min(left * 2 ** min(right, 64), _BOUND_CAP)
+        if isinstance(node.op, ast.Div) and isinstance(
+            values.get(id(node.right)), Fraction
+        ):
+            return left  # dividing by a known constant does not grow it
         return min(left + right, _BOUND_CAP)
     if isinstance(node, ast.Call):
+        name = node.func.id if isinstance(node.func, ast.Name) else ""
+        if name in _GROWING_FUNCTIONS:
+            # exp(k*log(n) + x - x) is n**k once x - x cancels.
+            largest = max(children, default=0)
+            return min(int(1.45 * 2 ** min(largest, 64)) + 1, _BOUND_CAP)
         return min(sum(children) + 2, _BOUND_CAP)
     return max(children, default=0)
+
+
+def _check_symbolic_counting(node: ast.AST, values: dict, bounds: dict) -> None:
+    """factorial(x - x + 100000000) is factorial(100000000) once SymPy
+    cancels x - x, so a symbolic argument is bounded by what it could
+    collapse to."""
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"factorial", "binomial"}
+    ):
+        return
+    limit = MAX_FACTORIAL_ARGUMENT.bit_length()
+    for arg in node.args:
+        if values.get(id(arg)) is None and bounds.get(id(arg), 0) > limit:
+            raise SafeParserError(_COST_ERROR)
 
 
 def _check_symbolic_power(node: ast.AST, values: dict, bounds: dict) -> None:
@@ -436,6 +461,7 @@ def _check_evaluation_cost(code: str) -> None:
         node, children_done = stack.pop()
         if children_done:
             _check_symbolic_power(node, values, bounds)
+            _check_symbolic_counting(node, values, bounds)
             values[id(node)] = _node_value(node, values)
             bounds[id(node)] = _collapse_bits(node, values, bounds)
             continue

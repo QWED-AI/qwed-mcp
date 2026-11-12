@@ -199,6 +199,9 @@ def test_premises_must_be_a_list_of_strings():
         # symbols that cancel while SymPy builds the expression
         "2**(10**10 + x - x)",
         "(x - x + 2)**(10**10)",
+        "factorial(x - x + 100000000)",
+        "binomial(x - x + 100000000, 5)",
+        "2**exp(100*log(2) + x - x)",
     ],
 )
 def test_expression_beyond_cost_bound_is_refused_quickly(expression):
@@ -246,6 +249,9 @@ def test_expression_beyond_cost_bound_is_refused_quickly(expression):
         "(x + 1)**3",
         "x**(1/2)",
         "E**(100*x)",
+        "2**(x/1000000)",
+        "2**exp(x)",
+        "factorial(n + 1)",
         "Float(1/3, 50)",
         "1.5**1000000",
     ],
