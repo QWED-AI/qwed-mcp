@@ -217,3 +217,24 @@ def test_get_background_timeout_rejects_inf():
     """Infinity must be rejected as a non-finite value."""
     with patch.dict(os.environ, {"QWED_MCP_BACKGROUND_TIMEOUT": "inf"}):
         assert _get_background_timeout() == _DEFAULT_BACKGROUND_TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_script_directory_is_not_on_the_import_path(monkeypatch):
+    """A module planted beside the script must not be importable."""
+    import tempfile
+    import uuid as _uuid
+    from pathlib import Path
+
+    monkeypatch.setenv("QWED_MCP_TRUSTED_CODE_EXECUTION", "true")
+    name = f"qwed_planted_{_uuid.uuid4().hex}"
+    planted = Path(tempfile.gettempdir()) / f"{name}.py"
+    planted.write_text("print('PLANTED')\n", encoding="utf-8")
+    try:
+        _, result = await execute_python_code_tool(
+            {"code": f"try:\n    import {name}\nexcept ImportError:\n    print('isolated')"}
+        )
+    finally:
+        planted.unlink()
+    assert "isolated" in result[0].text
+    assert "PLANTED" not in result[0].text

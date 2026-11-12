@@ -62,7 +62,8 @@ def test_execute_python_code_returns_verified_allow_when_safe(monkeypatch):
     )
 
     assert result["verified"] is True
-    assert result["status"] == "ALLOW_VERIFIED"
+    assert result["status"] == "ALLOW_ADMITTED"
+    assert "deterministic verification" not in result["message"]
     assert result["risk_level"] == "high"
     assert result["normalized_arguments"]["background"] is True
 
@@ -96,6 +97,7 @@ def test_execute_python_code_respects_admin_policy_after_verification(monkeypatc
     assert result["verified"] is False
     assert result["status"] == "BLOCKED_ADMIN_POLICY"
     assert result["error_code"] == "QWED-MCP-RISK-006"
+    assert "was verified" not in result["message"]
 
 
 def test_verification_status_requires_canonical_uuid():

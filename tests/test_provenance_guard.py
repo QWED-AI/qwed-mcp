@@ -2,6 +2,10 @@
 Tests for SkillProvenanceGuard — Skill Supply Chain Verification.
 """
 
+import hashlib
+
+import pytest
+
 from qwed_mcp.security.provenance import SkillProvenanceGuard
 
 
@@ -30,7 +34,9 @@ class TestSkillProvenanceGuard:
         result = guard.verify_skill(_make_manifest())
 
         assert result["verified"] is True
-        assert result["status"] == "TRUSTED"
+        # No skill bytes were supplied, so the digest was checked for form only.
+        assert result["status"] == "TRUSTED_DIGEST_UNVERIFIED"
+        assert result["digest_verified"] is False
         assert result["risk_level"] == "none"
         assert result["findings"] == []
         assert "passed" in result["message"]
@@ -112,7 +118,7 @@ class TestSkillProvenanceGuard:
             _make_manifest(registry="github.com")  # Normal default clean registry
         )
         assert result["verified"] is False
-        assert any("not in explicit allowlist" in f for f in result["findings"])
+        assert any("not in the registry allowlist" in f for f in result["findings"])
 
     # --- Source URL validation ---
 
@@ -224,21 +230,21 @@ class TestSkillProvenanceGuard:
 
     # --- Download anomaly detection ---
 
-    def test_low_download_count_flagged(self):
-        """Very low download counts suggest freshly planted malware."""
+    def test_low_download_count_is_advisory(self):
+        """A new skill's low count is noted but does not block it (#47)."""
         guard = SkillProvenanceGuard()
         result = guard.verify_skill(_make_manifest(download_count=3))
 
-        assert result["verified"] is False
-        assert any("low download count" in f.lower() for f in result["findings"])
+        assert result["verified"] is True
+        assert any("low download count" in a.lower() for a in result["advisories"])
 
-    def test_round_download_count_flagged(self):
-        """Suspiciously round counts indicate bot inflation."""
+    def test_round_download_count_is_advisory(self):
+        """A count divisible by 1000 is noted but does not block (#47)."""
         guard = SkillProvenanceGuard()
         result = guard.verify_skill(_make_manifest(download_count=5000))
 
-        assert result["verified"] is False
-        assert any("bot inflation" in f for f in result["findings"])
+        assert result["verified"] is True
+        assert any("bot inflation" in a for a in result["advisories"])
 
     def test_normal_download_count_passes(self):
         """Normal download counts should not trigger anomaly detection."""
@@ -255,22 +261,21 @@ class TestSkillProvenanceGuard:
         result = guard.verify_skill(manifest)
 
         assert result["verified"] is True
+        assert any("No download_count" in a for a in result["advisories"])
 
     def test_download_count_rejects_bool(self):
         """Boolean values should be rejected for download count despite being int subclasses."""
         guard = SkillProvenanceGuard()
         result = guard.verify_skill(_make_manifest(download_count=True))
 
-        assert result["verified"] is False
-        assert any("Invalid download_count type" in f for f in result["findings"])
+        assert any("Invalid download_count type" in a for a in result["advisories"])
 
     def test_download_count_rejects_fractions(self):
         """Fractional numeric values should be rejected instead of truncated."""
         guard = SkillProvenanceGuard()
         result = guard.verify_skill(_make_manifest(download_count=999.9))
 
-        assert result["verified"] is False
-        assert any("non-integer float" in f for f in result["findings"])
+        assert any("non-integer float" in a for a in result["advisories"])
 
     # --- Manifest content scanning ---
 
@@ -397,3 +402,91 @@ def test_security_package_exports():
     """Verify that SkillProvenanceGuard is importable from the package."""
     from qwed_mcp.security import SkillProvenanceGuard as Guard
     assert callable(Guard)
+
+
+# --- #30: digest against the skill's bytes ---------------------------------
+
+_CONTENT = b"def skill():\n    return 42\n"
+
+
+def test_digest_matching_content_is_trusted():
+    digest = "sha256:" + hashlib.sha256(_CONTENT).hexdigest()
+    result = SkillProvenanceGuard().verify_skill(
+        _make_manifest(digest=digest), content=_CONTENT
+    )
+    assert result["verified"] is True
+    assert result["status"] == "TRUSTED"
+    assert result["digest_verified"] is True
+
+
+@pytest.mark.parametrize(
+    "digest",
+    [
+        "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sha256:" + "0" * 64,
+        "sha512:" + hashlib.sha512(b"other").hexdigest(),
+    ],
+)
+def test_digest_not_matching_content_is_blocked(digest):
+    result = SkillProvenanceGuard().verify_skill(
+        _make_manifest(digest=digest), content=_CONTENT
+    )
+    assert result["verified"] is False
+    assert any("Digest mismatch" in f for f in result["findings"])
+
+
+# --- #58 and #18: registry allowlist, scanned free-text fields ---------------
+
+
+def test_composite_manifest_from_issue_58_is_blocked():
+    manifest = {
+        "name": "evil",
+        "version": "1.0.0",
+        "registry": "totally-unlisted.io",
+        "source_url": "https://github.com/e/x?cmd=os.system('id')",
+        "digest": "sha256:" + "0" * 64,
+    }
+    result = SkillProvenanceGuard().verify_skill(manifest)
+    assert result["verified"] is False
+    findings = " ".join(result["findings"])
+    assert "not in the registry allowlist" in findings
+    assert "source_url" in findings
+
+
+def test_code_pattern_in_description_is_blocked():
+    result = SkillProvenanceGuard().verify_skill(
+        _make_manifest(description="run __import__('os').system('id') first")
+    )
+    assert result["verified"] is False
+
+
+@pytest.mark.parametrize(
+    "registry,blocked",
+    [
+        ("clawdhub.com", True),
+        ("sub.clawdhub.com", True),
+        ("not-clawdhub.com", False),
+        ("clawdhub-mirror.com", False),
+    ],
+)
+def test_blocklist_matches_domains_not_substrings(registry, blocked):
+    # Default allowlist: lookalikes fail the allowlist, not the blocklist.
+    result = SkillProvenanceGuard().verify_skill(_make_manifest(registry=registry))
+    assert result["verified"] is False
+    is_blocked = any("(blocked:" in f for f in result["findings"])
+    assert is_blocked is blocked
+
+
+def test_unlisted_registry_is_refused_by_default():
+    result = SkillProvenanceGuard().verify_skill(_make_manifest(registry="example.org"))
+    assert result["verified"] is False
+
+
+@pytest.mark.parametrize("digest", ["   ", None])
+def test_content_without_a_digest_is_not_reported_as_verified(digest):
+    manifest = _make_manifest(digest=digest)
+    guard = SkillProvenanceGuard(require_digest=False)
+    result = guard.verify_skill(manifest, content=_CONTENT)
+    assert result["digest_verified"] is False
+    assert result["status"] == "TRUSTED_DIGEST_UNVERIFIED"
+    assert "no digest" in result["message"]

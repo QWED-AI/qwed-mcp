@@ -72,8 +72,10 @@ Quit completely (system tray → Quit) and reopen.
 
 ### Step 4: Test it!
 
+Code execution is off by default: until the server administrator sets `QWED_MCP_TRUSTED_CODE_EXECUTION=true` in the server's environment (for example with an `"env": {"QWED_MCP_TRUSTED_CODE_EXECUTION": "true"}` entry next to `"command"` above), `execute_python_code` answers `BLOCKED_ADMIN_POLICY` and runs nothing. Admitted code then runs with the server's privileges, so only turn it on where that is acceptable.
+
 Ask Claude:
-> "Write a python script that verifies a 10,000 investment at 7.5% for 5 years using the `qwed_new` math engine, and run it using `execute_python_code`."
+> "Write a python script that checks a 10,000 investment at 7.5% for 5 years with the `decimal` module, and run it using `execute_python_code`."
 
 ---
 
@@ -88,7 +90,7 @@ They have been replaced with a single, highly capable tool:
 > "Use `verify_math` to check this formula." (Claude loads 14 different tool schemas into context)
 
 **After:**
-> "Use `execute_python_code` to write and run a script that imports `qwed_new.engines.math_engine` to verify..." (Claude loads 1 tool schema into context)
+> "Use `execute_python_code` to write and run a script that checks..." (Claude loads 1 tool schema into context)
 
 If you see an `"Unknown tool"` error, it means Claude is trying to use a legacy tool. Simply tell Claude: *"The `verify_*` tools are removed. Use `execute_python_code` to natively write and run a Python verification script."*
 
@@ -98,7 +100,17 @@ If you see an `"Unknown tool"` error, it means Claude is trying to use a legacy 
 
 | Tool | Description | Use Case |
 |------|-------------|----------|
-| `execute_python_code` | **Subprocess Execution** | The single entrypoint for all QWED capabilities. Executes dynamically generated Python code in a subprocess with restricted environment variables. Note: Runs with server privileges; ensure inputs are trusted. |
+| `execute_python_code` | **Subprocess Execution** | The single tool the server registers. Executes dynamically generated Python code in a subprocess with restricted environment variables, after an allowlist admission check (below). Note: Runs with server privileges; ensure inputs are trusted. |
+
+### What code is admitted
+
+Before any code runs, the server parses it and admits it only when every module, builtin and attribute it uses is on an allowlist (`src/qwed_mcp/engines/python_allowlist.py`):
+
+- **Modules:** computation-only standard-library modules such as `math`, `cmath`, `decimal`, `fractions`, `statistics`, `itertools`, `functools`, `collections`, `json`, `re`, `datetime` and `random`, and in each only the listed names. Modules that reach files, the network, processes, the environment or the import system (`os`, `sys`, `subprocess`, `socket`, `pathlib`, `importlib`, `ctypes`, ...) are refused, and so is every third-party package, QWED SDK packages included.
+- **Builtins:** only builtins that compute. `open`, `eval`, `exec`, `compile`, `__import__`, `getattr`, `vars`, `globals`, `type`, `input`, `breakpoint` and the rest are refused wherever they appear, so they cannot be rebound or passed on.
+- **Attributes:** no special or private attribute (`__x__`, `_x`) apart from reading `__init__` and `__name__`, no frame or traceback attribute, and `str.format` only on a string literal whose fields read no attribute.
+
+Admission is a static check of what the code can reach. It is not a proof that the code is correct, and it does not limit resource use: the execution timeout limits run time, and nothing limits memory. Refused code is reported with the reason and never runs. The output of admitted code comes from that code, so treat it as untrusted data.
 
 ---
 
@@ -121,8 +133,8 @@ Write a python script importing necessary tools to verify this EMI calculation, 
 ### Complex Reasoning Workflows (The Power of Python)
 ```text
 Read the user terms in the attached document. 
-1. Use execute_python_code to extract and verify the legal clauses using qwed_legal.
-2. In the same script, verify if the referenced financial penalties align with the allowed boundaries.
+1. Extract the financial penalties the terms state.
+2. Use execute_python_code to check that each penalty stays within the stated boundaries.
 ```
 
 ---
@@ -141,7 +153,7 @@ Read the user terms in the attached document.
 ├───────────────────────────────────────────┤
 │ execute_python_code()                     │
 │  └─► Subprocess Execution (Restricted Env)│
-│       └─► Native QWED library execution   │
+│       └─► Allowlist admission, then run   │
 └───────────────────────────────────────────┘
 ```
 
@@ -149,14 +161,12 @@ Read the user terms in the attached document.
 
 ## 🎯 Why QWED-MCP?
 
-> *Note: Subprocess execution provides answers/checks purely based on what QWED SDK methods are invoked inside the executed scripts. Execution itself does not guarantee injection detection without specific SDK calls.*
+> *Note: Subprocess execution provides answers/checks purely based on what the executed scripts compute. Execution itself does not guarantee injection detection. QWED SDK packages are not on the admission allowlist yet, so scripts that import them are refused (see [What code is admitted](#what-code-is-admitted)).*
 
 | Without QWED-MCP | With QWED-MCP |
 |------------------|---------------|
-| LLM calculates → 95% correct | Executes Python script calling `qwed_finance` → **100% correct** |
-| LLM writes SQL → might inject | Script uses `qwed_new` analyzer → **injection detected** |
-| LLM reasons → might be wrong | Z3 solver executed via SDK → **formally proven** |
-| LLM codes → might be unsafe | AST check script executed → **security checked** |
+| LLM calculates in its reply → may slip or round | Script computes it with `decimal` or `fractions` → **exact arithmetic, shown in the output** |
+| LLM writes code → might reach files, network or processes | Code is checked against the allowlist first → **refused before it runs** |
 
 ---
 
