@@ -25,6 +25,9 @@ UNVERIFIABLE = "UNVERIFIABLE"
 # A proposition is a plain name: letters, digits and underscores, starting
 # with a letter. Anything else is not read as a variable.
 _VARIABLE = re.compile(r"[a-z][a-z0-9_]*\Z")
+# Operator words are never proposition names: "A and not" has no operand
+# after "not", and must not become a variable called "not".
+_RESERVED = frozenset({"all", "and", "are", "if", "implies", "is", "not", "or", "then"})
 
 
 class UnsupportedStatementError(ValueError):
@@ -49,7 +52,7 @@ class _StatementParser:
 
     def variable(self, name: str):
         name = name.strip()
-        if not _VARIABLE.match(name):
+        if not _VARIABLE.match(name) or name in _RESERVED:
             raise UnsupportedStatementError(
                 f"'{name}' is not a proposition name (letters, digits, underscores)"
             )
