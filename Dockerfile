@@ -8,8 +8,8 @@ WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 # No APT download retries: a retried download is the path the apt advisory
 # fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
-RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
+    apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common build-essential && \
     add-apt-repository ppa:deadsnakes/ppa -y && \
     apt-get update && \
@@ -52,9 +52,6 @@ FROM ubuntu@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5
 WORKDIR /app
 
 ENV DEBIAN_FRONTEND=noninteractive
-# No APT download retries: a retried download is the path the apt advisory
-# fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
-RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries
 
 # Install Python 3.14 runtime on pristine Ubuntu 24.04.
 # software-properties-common is needed only for add-apt-repository; purge it
@@ -63,7 +60,10 @@ RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries
 # Our app uses venv-installed cryptography>=48.0.0 and PyJWT>=2.12.0.
 # apt-get upgrade applies Ubuntu security updates released after the pinned
 # base image (for example apt 2.8.4ubuntu0.1, which the image scanners flag).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# No APT download retries: a retried download is the path the apt advisory
+# fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
+RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
+    apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common && \
     add-apt-repository ppa:deadsnakes/ppa -y && \
     apt-get update && \
