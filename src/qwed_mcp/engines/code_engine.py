@@ -2,8 +2,9 @@
 Code Security Verification Engine
 
 Python code is admitted only when every module, builtin and attribute it uses
-is on an allowlist (see ``python_allowlist``). JavaScript is pattern-scanned
-only and is never admitted.
+is on an allowlist (see ``python_allowlist``). SQL gets the SQL engine's
+verdict (``sql_engine``), so both entry points agree. JavaScript is
+pattern-scanned only and is never admitted.
 """
 
 import ast
@@ -13,6 +14,7 @@ import logging
 from typing import List
 
 from .python_allowlist import admission_issues
+from .sql_engine import sql_issues
 
 logger = logging.getLogger("qwed-mcp.engines.code")
 
@@ -36,18 +38,6 @@ JAVASCRIPT_NOT_ADMITTED = (
     "JavaScript is only pattern-scanned, so it is never admitted: "
     "no assurance produced"
 )
-
-# SQL injection patterns
-SQL_INJECTION_PATTERNS = [
-    r"'\s*OR\s+'1'\s*=\s*'1",
-    r"'\s*OR\s+1\s*=\s*1",
-    r";\s*DROP\s+TABLE",
-    r";\s*DELETE\s+FROM",
-    r";\s*INSERT\s+INTO",
-    r"--",
-    r"/\*.*\*/",
-    r"UNION\s+SELECT",
-]
 
 
 def verify_code_safety(code: str, language: str) -> dict:
@@ -188,15 +178,6 @@ def analyze_javascript(code: str) -> List[str]:
 
 
 def analyze_sql(code: str) -> List[str]:
-    """Analyze SQL for injection vulnerabilities."""
-    issues = []
-
-    for pattern in SQL_INJECTION_PATTERNS:
-        if re.search(pattern, code, re.IGNORECASE):
-            issues.append(f"Potential SQL injection: Pattern '{pattern}' detected")
-
-    # Check for string concatenation patterns (common in injection)
-    if re.search(r"\+\s*['\"]", code) or re.search(r"['\"\s]\+", code):
-        issues.append("Warning: String concatenation in SQL query detected")
-
-    return list(set(issues))
+    """Why the SQL does not pass: the SQL engine parses it and checks the
+    parse (#60). An empty list only when it passes."""
+    return sql_issues(code)
