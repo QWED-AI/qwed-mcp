@@ -158,6 +158,10 @@ def test_premises_must_be_a_list_of_strings():
         "((10**1000)**Rational(1, 2))**10000",
         "2**sqrt(2)",
         "binomial(1/(2**400000), 10000)",
+        # floats: a huge precision, or an exact integer made from a float
+        "Float(1/3, 1000000000)",
+        "Float(1/3, precision=1000000000)",
+        "Integer(1e308)**10000",
     ],
 )
 def test_expression_beyond_cost_bound_is_refused_quickly(expression):
@@ -196,6 +200,10 @@ def test_expression_beyond_cost_bound_is_refused_quickly(expression):
         "x**sqrt(2)",
         "E**10",
         "binomial(Rational(1, 2), 3)",
+        "2**0.5",
+        "2**pi",
+        "Float(1/3, 50)",
+        "1.5**1000000",
     ],
 )
 def test_bounded_expression_still_parses(expression):

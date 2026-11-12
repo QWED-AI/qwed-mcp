@@ -49,11 +49,11 @@ MAX_EXPRESSION_LENGTH = 5_000
 # could exceed the bound, or whose cost cannot be bounded, is refused.
 MAX_INTEGER_BITS = 1_000_000
 MAX_FACTORIAL_ARGUMENT = 10_000
+# Float(x, dps) keeps dps decimal digits (precision= is in bits), so the
+# requested precision is bounded too.
+MAX_FLOAT_DIGITS = 10_000
 
 _COST_ERROR = "Expression exceeds the evaluation cost bound"
-
-# Names that stand for constants in the parser's namespace.
-_CONSTANT_NAMES = frozenset({"pi", "E", "e", "I", "oo"})
 
 # Functions whose result can be far larger than their argument
 # (exp(k * log(n)) evaluates to n**k).
@@ -72,9 +72,19 @@ class _Approx:
         self.bits = max(int(bits), 1)
 
 
-# A value is an exact Fraction, an _Approx, or None when it depends on a
-# symbol (SymPy keeps those symbolic, so they cost nothing to build).
-_Value = Union[Fraction, _Approx, None]
+class _FloatConst:
+    """A floating-point constant: fixed precision, so arithmetic on it does
+    not grow, but it is not an exact integer either."""
+
+    __slots__ = ()
+
+
+_FLOAT = _FloatConst()
+
+# A value is an exact Fraction, an _Approx, _FLOAT, or None when it depends
+# on a symbol or a named constant such as pi (SymPy keeps those symbolic, so
+# they cost nothing to build).
+_Value = Union[Fraction, _Approx, _FloatConst, None]
 
 
 def _bits(value: Fraction) -> int:
@@ -176,13 +186,30 @@ _VALUED_CALLS = {
 }
 
 
-def _call_value(node: ast.Call, args: list) -> _Value:
+def _float_value(node: ast.Call, args: list, values: dict) -> _Value:
+    """Float(x[, dps[, precision]]): refuse a precision beyond the bound."""
+    requested = list(zip(("dps", "precision"), args[1:]))
+    requested += [(kw.arg, values.get(id(kw.value))) for kw in node.keywords]
+    for key, value in requested:
+        limit = MAX_FLOAT_DIGITS * 4 if key == "precision" else MAX_FLOAT_DIGITS
+        if not isinstance(value, Fraction) or abs(value) > limit:
+            raise SafeParserError(_COST_ERROR)
+    return _FLOAT
+
+
+def _call_value(node: ast.Call, args: list, values: dict) -> _Value:
     """The value or size bound of a call on constants. A call target that is
     itself a call is a child node, so it is bounded on its own."""
     name = node.func.id if isinstance(node.func, ast.Name) else ""
     if name in {"factorial", "binomial"} and node.keywords:
         # evaluate=... and the like change what SymPy computes; refuse them.
         raise SafeParserError(f"Keyword arguments to {name} are not admitted")
+    if name == "Float":
+        return _float_value(node, args, values)
+    if any(arg is _FLOAT for arg in args):
+        # Integer(1e308) is an exact integer of up to 1024 bits; anything
+        # else of a float is a float.
+        return _Approx(1100) if name in {"Integer", "Rational"} else _FLOAT
     if name in _VALUED_CALLS:
         return _VALUED_CALLS[name](args)
     if name == "Symbol" or any(arg is None for arg in args):
@@ -249,10 +276,12 @@ def _exact_binop(op: ast.operator, left: Fraction, right: Fraction) -> _Value:
 
 
 def _binop_value(op: ast.operator, left: _Value, right: _Value) -> _Value:
+    if left is None or right is None:
+        return None  # symbolic: SymPy keeps it symbolic
+    if left is _FLOAT or right is _FLOAT:
+        return _FLOAT  # float arithmetic keeps a fixed precision
     if isinstance(op, ast.Pow):
         return _pow_value(left, right)
-    if left is None or right is None:
-        return None
     if isinstance(left, Fraction) and isinstance(right, Fraction):
         return _exact_binop(op, left, right)
     if isinstance(op, (ast.Add, ast.Sub)):
@@ -268,10 +297,10 @@ def _node_value(node: ast.AST, values: dict) -> _Value:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
         if isinstance(value, float):
-            return _Approx(64)
+            return _FLOAT
         return _bounded(Fraction(value))
     if isinstance(node, ast.Name):
-        return _Approx(2) if node.id in _CONSTANT_NAMES else None
+        return None  # a symbol, or a named constant such as pi
     if isinstance(node, ast.UnaryOp):
         operand = values.get(id(node.operand))
         if isinstance(node.op, ast.USub) and isinstance(operand, Fraction):
@@ -282,7 +311,7 @@ def _node_value(node: ast.AST, values: dict) -> _Value:
             node.op, values.get(id(node.left)), values.get(id(node.right))
         )
     if isinstance(node, ast.Call):
-        return _call_value(node, [values.get(id(arg)) for arg in node.args])
+        return _call_value(node, [values.get(id(arg)) for arg in node.args], values)
     return None
 
 
