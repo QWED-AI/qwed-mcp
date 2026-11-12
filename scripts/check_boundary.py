@@ -7,16 +7,20 @@ replacement for proper security review.
 """
 
 import ast
+import subprocess  # nosec B404 - runs git with a fixed argument list
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCAN_ROOT = REPO_ROOT / "src"
+# Directories never scanned, matched against repo-root-relative path parts
+# only, so the checkout location cannot remove files from the scan (#65).
 EXCLUDED_DIRS = {".git", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache"}
 
 # Approved wrapper paths (relative to repo root)
 APPROVED_WRAPPER_PATHS = {
     "src/qwed_mcp/engines/safe_parser.py",
+    # The gate itself runs `git ls-files` with a fixed argument list.
+    "scripts/check_boundary.py",
 }
 
 # Full call names that are forbidden outside approved wrappers (dotted names)
@@ -77,18 +81,18 @@ def _build_alias_map(tree: ast.Module) -> dict[str, str]:
     return alias_map
 
 
-def check_file(filepath: Path) -> list[str]:
+def check_file(filepath: Path, repo_root: Path = REPO_ROOT) -> list[str]:
     errors = []
     try:
         tree = ast.parse(filepath.read_text(encoding="utf-8"))
     except SyntaxError as exc:
         errors.append(
-            f"  [PARSE_ERROR] {filepath.relative_to(REPO_ROOT)}:{exc.lineno}: "
+            f"  [PARSE_ERROR] {filepath.relative_to(repo_root)}:{exc.lineno}: "
             "File could not be parsed; boundary check must fail closed"
         )
         return errors
 
-    relpath = filepath.relative_to(REPO_ROOT).as_posix()
+    relpath = filepath.relative_to(repo_root).as_posix()
     in_wrapper = relpath in APPROVED_WRAPPER_PATHS
     alias_map = _build_alias_map(tree)
 
@@ -150,18 +154,52 @@ def check_file(filepath: Path) -> list[str]:
     return errors
 
 
-def main() -> int:
+def git_ls_python_files(repo_root: Path) -> list[str]:
+    """Repo-relative paths of the Python files git tracks.
+
+    Raises RuntimeError when git cannot list them, so the check fails closed
+    instead of scanning nothing.
+    """
+    result = subprocess.run(  # nosec B603 B607 - fixed argument list
+        ["git", "ls-files", "-z", "--", "*.py"],
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.decode(errors="replace").strip())
+    return [entry for entry in result.stdout.decode().split("\0") if entry]
+
+
+def select_files(repo_root: Path, entries: list[str]) -> list[Path]:
+    """The listed files to scan: every one whose repo-relative path has no
+    excluded directory in it (#65)."""
+    files = []
+    for entry in entries:
+        relative = Path(entry)
+        if any(part in EXCLUDED_DIRS for part in relative.parts):
+            continue
+        files.append(repo_root / relative)
+    return sorted(files)
+
+
+def main(repo_root: Path = REPO_ROOT, list_files=git_ls_python_files) -> int:
     errors: list[str] = []
 
-    if not SCAN_ROOT.exists() or not SCAN_ROOT.is_dir():
+    try:
+        pyfiles = select_files(repo_root, list_files(repo_root))
+    except (OSError, RuntimeError) as exc:
         print(" QWED Boundary check FAILED")
-        print(f"  [CONFIG_ERROR] Scan root not found or not a directory: {SCAN_ROOT}")
+        print(f"  [CONFIG_ERROR] Could not list tracked files: {exc}")
         return 1
 
-    for pyfile in sorted(SCAN_ROOT.rglob("*.py")):
-        if any(part in EXCLUDED_DIRS for part in pyfile.parts):
-            continue
-        errors.extend(check_file(pyfile))
+    if not pyfiles:
+        print(" QWED Boundary check FAILED")
+        print("  [CONFIG_ERROR] No Python files found to scan")
+        return 1
+
+    for pyfile in pyfiles:
+        errors.extend(check_file(pyfile, repo_root))
 
     if errors:
         print(" QWED Boundary check FAILED")
@@ -169,7 +207,7 @@ def main() -> int:
             print(err)
         return 1
 
-    print(" QWED Boundary check passed")
+    print(f" QWED Boundary check passed ({len(pyfiles)} files scanned)")
     return 0
 
 
