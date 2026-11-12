@@ -23,13 +23,20 @@ def _normalise(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def _declared(path: Path) -> set:
+def _requirement(entry: str) -> tuple:
+    """(normalised name, specifier with spaces removed) of one requirement."""
+    name = re.match(r"[A-Za-z0-9_.-]+", entry).group(0)
+    return _normalise(name), entry[len(name) :].replace(" ", "")
+
+
+def _declared_requirements(path: Path) -> set:
     text = path.read_text(encoding="utf-8")
     block = re.search(r"^dependencies = \[(.*?)^\]", text, re.M | re.S).group(1)
-    return {
-        _normalise(re.match(r"[A-Za-z0-9_.-]+", entry).group(0))
-        for entry in re.findall(r'"([^"]+)"', block)
-    }
+    return {_requirement(entry) for entry in re.findall(r'"([^"]+)"', block)}
+
+
+def _declared(path: Path) -> set:
+    return {name for name, _ in _declared_requirements(path)}
 
 
 def _imported_top_level_modules() -> set:
@@ -50,9 +57,14 @@ def _distributions_of(module: str, mapping: dict) -> list:
     if module in mapping:
         return mapping[module]
     try:
-        return [distribution(module).metadata["Name"]]
+        dist = distribution(module)
     except PackageNotFoundError:
         raise AssertionError(f"'{module}' is imported but not installed") from None
+    # Accept it only if that distribution really installs the module.
+    provided = {str(path).replace("\\", "/") for path in dist.files or ()}
+    if f"{module}/__init__.py" not in provided and f"{module}.py" not in provided:
+        raise AssertionError(f"no installed distribution provides '{module}'")
+    return [dist.metadata["Name"]]
 
 
 def _third_party_distributions() -> set:
@@ -80,9 +92,11 @@ def test_every_declared_package_is_imported_or_a_version_floor():
 
 
 def test_requirements_txt_matches_pyproject():
+    """Same packages with the same version specifiers in both files."""
     requirements = {
-        _normalise(re.match(r"[A-Za-z0-9_.-]+", line).group(0))
+        _requirement(line.strip())
         for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.startswith("#")
     }
-    assert requirements == _declared(ROOT / "pyproject.toml")
+    assert requirements == _declared_requirements(ROOT / "pyproject.toml")
+    assert ("anyio", ">=4.5,<5") in requirements
