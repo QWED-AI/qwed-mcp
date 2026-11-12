@@ -227,23 +227,45 @@ def _condition_parts(condition: exp.Expression) -> Iterable[exp.Expression]:
         yield condition
 
 
-# Nodes that read data or a bound value: a condition holding none of them is
-# constant. COUNT(*) and other aggregates read rows without naming a column.
-_DATA_NODES = (
-    exp.Column,
-    exp.Placeholder,
-    exp.Parameter,
-    exp.Star,
-    exp.AggFunc,
-    exp.Table,
-)
+# Nodes through which a condition depends on the row (or group) it is
+# tested against, or on a bound value: a column, a parameter, or an
+# aggregate over the rows (COUNT(*) in HAVING).
+_ROW_NODES = (exp.Column, exp.Placeholder, exp.Parameter, exp.Star, exp.AggFunc)
 
 
-def _data_free(node: exp.Expression) -> bool:
-    """Whether ``node`` reads no data and no bound parameter."""
-    if isinstance(node, _DATA_NODES):
+def _outside_subqueries(node: exp.Expression) -> Iterable[exp.Expression]:
+    """``node`` and its descendants, without entering any subquery."""
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        yield current
+        stack.extend(
+            child
+            for child in current.iter_expressions()
+            if not isinstance(child, exp.Select)
+        )
+
+
+def _correlated(select: exp.Select) -> bool:
+    """Whether a subquery refers to a table of an enclosing query, through a
+    qualified column whose table it does not read itself."""
+    local = {table.alias_or_name.lower() for table in select.find_all(exp.Table)}
+    return any(
+        column.table and column.table.lower() not in local
+        for column in select.find_all(exp.Column)
+    )
+
+
+def _row_independent(node: exp.Expression) -> bool:
+    """Whether ``node`` has the same value for every row: it reads no column,
+    parameter or aggregate outside its subqueries, and every subquery in it
+    is uncorrelated. ``1 = 1``, ``(SELECT COUNT(*)) = 1`` and
+    ``EXISTS (SELECT 1 FROM t)`` are; ``COUNT(*) > 1`` in HAVING and a
+    correlated ``EXISTS`` are not. An unqualified column inside a subquery
+    counts as the subquery's own."""
+    if any(isinstance(n, _ROW_NODES) for n in _outside_subqueries(node)):
         return False
-    return not any(node.find_all(*_DATA_NODES))
+    return not any(_correlated(select) for select in node.find_all(exp.Select))
 
 
 def _self_comparison(node: exp.Expression) -> bool:
@@ -272,9 +294,10 @@ def _condition_issues(root: exp.Expression) -> List[str]:
             if node is not part
         ]
         for part in parts:
-            if _data_free(part):
+            if _row_independent(part):
                 issues.append(
-                    f"Suspicious tautology detected: constant condition '{part.sql()}'"
+                    "Suspicious tautology detected: condition that does not depend "
+                    f"on the row '{part.sql()}'"
                 )
             elif _self_comparison(part):
                 issues.append(

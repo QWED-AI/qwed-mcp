@@ -307,3 +307,24 @@ def test_snowflake_folds_unquoted_names_to_upper_case():
     assert verify_sql_query(query, [], dialect="snowflake")["verified"] is False
     query = 'WITH users AS (SELECT 1 AS id) SELECT * FROM "USERS"'
     assert verify_sql_query(query, [], dialect="snowflake")["verified"] is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "UPDATE users SET is_admin = TRUE WHERE id = :id OR (SELECT COUNT(*)) = 1",
+        "SELECT * FROM users WHERE id = 7 OR EXISTS (SELECT 1 FROM orders)",
+        "SELECT * FROM users WHERE id = 7 OR 1 IN (SELECT 1)",
+    ],
+)
+def test_condition_that_does_not_depend_on_the_row_is_refused(query):
+    assert verify_sql_query(query)["verified"] is False
+
+
+def test_correlated_and_column_subqueries_are_admitted():
+    queries = [
+        "SELECT * FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id)",
+        "SELECT * FROM users WHERE id IN (SELECT user_id FROM orders WHERE total > 10)",
+    ]
+    for query in queries:
+        assert verify_sql_query(query)["verified"] is True, query
