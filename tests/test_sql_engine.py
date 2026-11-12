@@ -179,3 +179,44 @@ def test_unquoted_name_resolves_to_the_cte_in_any_case():
     query = "WITH users AS (SELECT id FROM accounts) SELECT * FROM USERS"
     assert verify_sql_query(query, ["accounts"])["verified"] is True
     assert extract_tables(query) == ["accounts"]
+
+
+def test_cte_in_an_unrelated_subquery_does_not_hide_a_table():
+    query = (
+        "SELECT s.* FROM secret AS s CROSS JOIN "
+        "(WITH secret AS (SELECT 1 AS id) SELECT id FROM secret) AS x"
+    )
+    assert verify_sql_query(query, ["users"])["verified"] is False
+    assert "secret" in extract_tables(query)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "WITH secret AS (SELECT id FROM users) UPDATE secret SET flag = 1 WHERE id = 7",
+        "WITH secret AS (SELECT id FROM users) DELETE FROM secret WHERE id = 7",
+        "WITH secret AS (SELECT id FROM users) INSERT INTO secret (id) VALUES (7)",
+    ],
+)
+def test_write_target_named_like_a_cte_is_checked(query):
+    result = verify_sql_query(query, ["users"], dialect="postgres")
+    assert result["verified"] is False
+    assert "secret" in extract_tables(query, dialect="postgres")
+
+
+def test_quoted_mixed_case_table_can_be_allowed_by_its_exact_name():
+    query = 'SELECT * FROM "Users"'
+    assert verify_sql_query(query, ["Users"], dialect="postgres")["verified"] is True
+    assert verify_sql_query(query, ["users"], dialect="postgres")["verified"] is False
+
+
+def test_brackets_are_subscripts_outside_tsql():
+    # In PostgreSQL a block comment inside a subscript is still a comment.
+    query = "SELECT arr[1 /*! OR 1=1 */] FROM t WHERE id = 1"
+    assert verify_sql_query(query, dialect="postgres")["verified"] is False
+    assert (
+        verify_sql_query("SELECT arr[1] FROM t WHERE id = 1", dialect="postgres")[
+            "verified"
+        ]
+        is True
+    )

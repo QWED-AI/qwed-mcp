@@ -99,7 +99,7 @@ def sql_issues(
     if not isinstance(query, str) or not query.strip():
         return ["Empty query: nothing was analysed, no assurance produced"]
 
-    lexical = _lexical_issues(query)
+    lexical = _lexical_issues(query, dialect)
     if lexical:
         return lexical
 
@@ -128,14 +128,17 @@ def sql_issues(
     return list(dict.fromkeys(issues))
 
 
-_CLOSERS = {"'": "'", '"': '"', "`": "`", "[": "]"}
+_CLOSERS = {"'": "'", '"': '"', "`": "`"}
+# Brackets quote identifiers only in these dialects; elsewhere they are
+# array subscripts and their contents are scanned like any other text.
+_BRACKET_DIALECTS = frozenset({"tsql", "sqlite"})
 
 
-def _quoted_end(query: str, start: int):
+def _quoted_end(query: str, start: int, closers: dict):
     """The index after the quoted string or identifier opening at
     ``start``, or an issue when it is unterminated or holds a backslash."""
     opener = query[start]
-    closer = _CLOSERS[opener]
+    closer = closers[opener]
     j = start + 1
     while j < len(query):
         if opener in "'\"" and query[j] == "\\":
@@ -165,7 +168,7 @@ def _comment_end(query: str, start: int):
     return None
 
 
-def _lexical_issues(query: str) -> List[str]:
+def _lexical_issues(query: str, dialect: Optional[str] = None) -> List[str]:
     """Comment and quoting forms that databases do not read the same way.
 
     A ``--`` comment is kept only when whitespace follows it (MySQL reads
@@ -174,10 +177,13 @@ def _lexical_issues(query: str) -> List[str]:
     comment, and a backslash inside a quoted string because only some
     databases read it as an escape.
     """
+    closers = dict(_CLOSERS)
+    if (dialect or "").lower() in _BRACKET_DIALECTS:
+        closers["["] = "]"
     i = 0
     while i < len(query):
-        if query[i] in _CLOSERS:
-            step = _quoted_end(query, i)
+        if query[i] in closers:
+            step = _quoted_end(query, i, closers)
         else:
             step = _comment_end(query, i)
             if step is None:
@@ -278,48 +284,79 @@ def _cte_key(cte: exp.CTE) -> str:
     return _identifier_key(alias.this if alias is not None else None)
 
 
-def _cte_names(root: exp.Expression) -> set:
-    return {_cte_key(cte) for cte in root.find_all(exp.CTE) if cte.alias}
+def _visible_ctes(node: exp.Expression):
+    """The CTEs a WITH on ``node`` itself defines."""
+    for value in node.args.values():
+        if isinstance(value, exp.With):
+            yield from value.expressions
 
 
-def _is_cte_reference(table: exp.Table, cte_names: set) -> bool:
-    """Whether ``table`` names a CTE rather than a stored table: it is
-    unqualified, a CTE has its name (compared as the database resolves
-    names), and it is not inside the body of that CTE
-    (``WITH t AS (SELECT * FROM t)`` reads the stored table ``t``)."""
-    key = _identifier_key(table.this)
-    if table.args.get("db") or table.args.get("catalog") or key not in cte_names:
+def _is_write_target(table: exp.Table) -> bool:
+    """The table an INSERT, UPDATE or DELETE writes: always a stored table,
+    whatever CTE shares its name."""
+    parent = table.parent
+    if isinstance(parent, (exp.Insert, exp.Update, exp.Delete)):
+        return parent.this is table
+    return (
+        isinstance(parent, exp.Schema)
+        and isinstance(parent.parent, exp.Insert)
+        and parent.parent.this is parent
+    )
+
+
+def _is_cte_reference(table: exp.Table) -> bool:
+    """Whether ``table`` names a CTE rather than a stored table.
+
+    It must be unqualified, read rather than written, and a CTE with its name
+    (compared as the database resolves names) must be defined by a WITH on
+    one of its enclosing queries, outside that CTE's own body
+    (``WITH t AS (SELECT * FROM t)`` reads the stored table ``t``). A CTE in
+    an unrelated subquery does not count.
+    """
+    if table.args.get("db") or table.args.get("catalog") or _is_write_target(table):
         return False
+    key = _identifier_key(table.this)
+    inside = set()
     node = table.parent
     while node is not None:
-        if isinstance(node, exp.CTE) and _cte_key(node) == key:
-            return False
+        if isinstance(node, exp.CTE):
+            inside.add(id(node))
+        for cte in _visible_ctes(node):
+            if _cte_key(cte) == key and id(cte) not in inside:
+                return True
         node = node.parent
-    return True
+    return False
 
 
 def _table_allowed(table: exp.Table, allowed: set) -> bool:
-    """Whether ``table`` is in ``allowed`` (lower-case names), by its table
-    part or its full qualified name. An unquoted identifier is compared
-    case-insensitively; a quoted one keeps its case, since databases such
-    as PostgreSQL treat "Users" and users as different tables."""
+    """Whether ``table`` is in ``allowed``, by its table part or its full
+    qualified name. Each part is compared as the database resolves it: an
+    unquoted identifier case-insensitively, a quoted one exactly, so
+    ["users"] does not admit "Users" but ["Users"] does."""
     parts = [part for part in table.parts if isinstance(part, exp.Identifier)]
-
-    def spelling(selected) -> str:
-        return ".".join(p.name if p.quoted else p.name.lower() for p in selected)
-
-    return bool({spelling(parts[-1:]), spelling(parts)} & allowed)
+    for entry in allowed:
+        wanted = entry.split(".")
+        if len(wanted) > len(parts):
+            continue
+        tail = parts[len(parts) - len(wanted) :]
+        if len(wanted) not in (1, len(parts)):
+            continue
+        if all(
+            part.name == want if part.quoted else part.name.lower() == want.lower()
+            for part, want in zip(tail, wanted)
+        ):
+            return True
+    return False
 
 
 def _table_issues(root: exp.Expression, allowed_tables: List[str]) -> List[str]:
-    allowed = {name.strip().lower() for name in allowed_tables if name and name.strip()}
-    cte_names = _cte_names(root)
+    allowed = {name.strip() for name in allowed_tables if name and name.strip()}
     unauthorized = []
     for table in root.find_all(exp.Table):
         name = table.name
         if not name:
             return ["Could not determine an accessed table: no assurance produced"]
-        if _is_cte_reference(table, cte_names):
+        if _is_cte_reference(table):
             continue
         if not _table_allowed(table, allowed):
             qualified = ".".join(
@@ -342,8 +379,7 @@ def extract_tables(query: str, dialect: Optional[str] = None) -> List[str]:
     for statement in statements:
         if statement is None:
             continue
-        cte_names = _cte_names(statement)
         for table in statement.find_all(exp.Table):
-            if table.name and not _is_cte_reference(table, cte_names):
+            if table.name and not _is_cte_reference(table):
                 names.add(table.name)
     return sorted(names)
