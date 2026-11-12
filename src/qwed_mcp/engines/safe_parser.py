@@ -10,17 +10,27 @@ Security fix for GHSA-mw6r-2hvm-4rp2 (CWE-94).
 """
 
 import ast
+import math
 import re
 import unicodedata
-from typing import Any, Dict, Optional, Tuple
+from fractions import Fraction
+from typing import Any, Dict, Optional, Tuple, Union
 
 import sympy
 from sympy import (
-    E, I, Integer, Float, Rational, Symbol, oo, pi,
+    E,
+    I,
+    Integer,
+    Float,
+    Rational,
+    Symbol,
+    oo,
+    pi,
 )
 from sympy.parsing.sympy_parser import (
     parse_expr,
     standard_transformations,
+    stringify_expr,
     implicit_multiplication_application,
     convert_xor,
 )
@@ -28,6 +38,450 @@ from sympy.parsing.sympy_parser import (
 __all__ = ["safe_parse_expr", "SafeParserError"]
 
 MAX_EXPRESSION_LENGTH = 5_000
+
+
+# CWE-400 (#25): parse_expr evaluates integer arithmetic eagerly, so
+# ``10**10**10`` or ``factorial(10**9)`` would build a huge integer before any
+# check could run. The code SymPy's transformations produce (the same code
+# parse_expr then evaluates, with implicit multiplication and ``n!`` already
+# rewritten) is checked first. Every constant subexpression gets either its
+# exact value or an upper bound on its size, and any operation whose result
+# could exceed the bound, or whose cost cannot be bounded, is refused.
+MAX_INTEGER_BITS = 1_000_000
+MAX_FACTORIAL_ARGUMENT = 10_000
+# Float(x, dps) keeps dps decimal digits (precision= is in bits), so the
+# requested precision is bounded too.
+MAX_FLOAT_DIGITS = 10_000
+
+_COST_ERROR = "Expression exceeds the evaluation cost bound"
+
+# Names that stand for constants in the parser's namespace. They are
+# constants, not symbols: sin(pi) evaluates to 0, so an expression built
+# from them can be an exact (and large) number.
+_CONSTANT_NAMES = frozenset({"pi", "E", "e", "I", "oo"})
+
+# Functions whose result can be far larger than their argument
+# (exp(k * log(n)) evaluates to n**k).
+_GROWING_FUNCTIONS = frozenset({"exp", "sinh", "cosh"})
+
+
+class _Approx:
+    """A constant whose exact value is not computed here, with an upper
+    bound on its size in bits."""
+
+    __slots__ = ("bits",)
+
+    def __init__(self, bits: int) -> None:
+        if bits > MAX_INTEGER_BITS:
+            raise SafeParserError(_COST_ERROR)
+        self.bits = max(int(bits), 1)
+
+
+class _FloatConst:
+    """A floating-point constant: fixed precision, so arithmetic on it does
+    not grow, but it is not an exact integer either."""
+
+    __slots__ = ()
+
+
+_FLOAT = _FloatConst()
+
+
+class _FloatResult:
+    """The result of a function of a float: usually a float, but it can be
+    an exact number (sin(0.0) is 0), and its size is unknown
+    (abs(2.0**1000000000) keeps the huge exponent)."""
+
+    __slots__ = ()
+
+
+_FLOAT_RESULT = _FloatResult()
+
+# A value is an exact Fraction, an _Approx, _FLOAT, _FLOAT_RESULT, or None
+# when it depends on a symbol (SymPy keeps those symbolic, so they cost
+# nothing to build).
+_Value = Union[Fraction, _Approx, _FloatConst, _FloatResult, None]
+_FLOAT_KINDS = (_FloatConst, _FloatResult)
+_EXACT_CONVERSIONS = frozenset({"Integer", "Rational", "factorial", "binomial"})
+
+
+def _bits(value: Fraction) -> int:
+    return max(abs(value.numerator).bit_length(), value.denominator.bit_length())
+
+
+def _size(value: _Value) -> int:
+    return value.bits if isinstance(value, _Approx) else _bits(value)
+
+
+def _bounded(value: Fraction) -> Fraction:
+    if _bits(value) > MAX_INTEGER_BITS:
+        raise SafeParserError(_COST_ERROR)
+    return value
+
+
+def _factorial_value(n: _Value) -> _Value:
+    if n is None:
+        return None
+    if isinstance(n, _Approx):
+        raise SafeParserError(_COST_ERROR)  # the argument cannot be bounded
+    if n.denominator != 1 or n < 0:
+        return None  # SymPy gives zoo or a gamma value, not a big integer
+    if n > MAX_FACTORIAL_ARGUMENT:
+        raise SafeParserError(_COST_ERROR)
+    return _bounded(Fraction(math.factorial(int(n))))
+
+
+def _binomial_value(n: _Value, k: _Value) -> _Value:
+    # SymPy multiplies k factors for a negative or non-integer n, so both
+    # arguments are bounded, not only n.
+    for arg in (n, k):
+        if isinstance(arg, _Approx):
+            raise SafeParserError(_COST_ERROR)
+        if arg is not None and abs(arg) > MAX_FACTORIAL_ARGUMENT:
+            raise SafeParserError(_COST_ERROR)
+    if n is None or k is None or k.denominator != 1 or k < 0:
+        return None
+    if n.denominator != 1:
+        # A product of k factors of n's size: binomial(1/2**400000, 10000).
+        return _Approx(_bits(n) * int(k) + 1)
+    n_int, k_int = int(n), int(k)
+    if n_int >= 0:
+        return _bounded(Fraction(math.comb(n_int, k_int)))
+    # For a negative n the value is the sign of k times the binomial of
+    # (k - n - 1) and k.
+    sign = -1 if k_int % 2 else 1
+    return _bounded(Fraction(sign * math.comb(k_int - n_int - 1, k_int)))
+
+
+def _exact_root(value: Fraction, degree: int) -> Optional[Fraction]:
+    if value < 0 or value.denominator != 1:
+        return None
+    root = round(int(value) ** (1 / degree)) if _bits(value) < 1000 else None
+    if root is not None and root**degree == value:
+        return Fraction(root)
+    return None
+
+
+def _root_value(args: list, degree: int) -> _Value:
+    if len(args) != 1 or args[0] is None:
+        return None
+    arg = args[0]
+    if isinstance(arg, Fraction):
+        exact = _exact_root(arg, degree)
+        if exact is not None:
+            return exact
+    return _Approx(_size(arg) // degree + 1)
+
+
+def _constructor_value(args: list) -> _Value:
+    """Integer(n) and Rational(p[, q])."""
+    if any(arg is None for arg in args) or not 1 <= len(args) <= 2:
+        return None
+    if any(isinstance(arg, _Approx) for arg in args):
+        return _Approx(sum(_size(arg) for arg in args))
+    if len(args) == 2:
+        return _bounded(args[0] / args[1]) if args[1] != 0 else None
+    return args[0]
+
+
+def _abs_value(args: list) -> _Value:
+    if len(args) != 1 or args[0] is None:
+        return None
+    return abs(args[0]) if isinstance(args[0], Fraction) else args[0]
+
+
+_VALUED_CALLS = {
+    "factorial": lambda args: _factorial_value(args[0]) if len(args) == 1 else None,
+    "binomial": lambda args: (
+        _binomial_value(args[0], args[1]) if len(args) == 2 else None
+    ),
+    "Integer": _constructor_value,
+    "Rational": _constructor_value,
+    "abs": _abs_value,
+    "Abs": _abs_value,
+    "sqrt": lambda args: _root_value(args, 2),
+    "cbrt": lambda args: _root_value(args, 3),
+}
+
+
+# The decimal exponent of a float literal. SymPy turns '1e-1000000000' into
+# an exact rational with a denominator of 10**1000000000 while parsing.
+# Digits may be grouped with underscores (PEP 515): 1e1_000_000_000.
+_FLOAT_EXPONENT = re.compile(r"[eE]([+-]?[\d_]+)")
+
+
+def _check_float_literal(node: ast.Call) -> None:
+    first = node.args[0] if node.args else None
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        match = _FLOAT_EXPONENT.search(first.value)
+        if match:
+            try:
+                exponent = int(match.group(1).replace("_", ""))
+            except ValueError:
+                raise SafeParserError(_COST_ERROR) from None
+            if abs(exponent) > MAX_FLOAT_DIGITS:
+                raise SafeParserError(_COST_ERROR)
+        if len(first.value) > MAX_FLOAT_DIGITS:
+            raise SafeParserError(_COST_ERROR)
+
+
+def _float_value(node: ast.Call, args: list, values: dict) -> _Value:
+    """Float(x[, dps[, precision]]): refuse a precision beyond the bound,
+    and a literal whose decimal exponent is beyond it."""
+    _check_float_literal(node)
+    requested = list(zip(("dps", "precision"), args[1:]))
+    requested += [(kw.arg, values.get(id(kw.value))) for kw in node.keywords]
+    for key, value in requested:
+        limit = MAX_FLOAT_DIGITS * 4 if key == "precision" else MAX_FLOAT_DIGITS
+        if not isinstance(value, Fraction) or abs(value) > limit:
+            raise SafeParserError(_COST_ERROR)
+    return _FLOAT
+
+
+def _call_value(node: ast.Call, args: list, values: dict) -> _Value:
+    """The value or size bound of a call on constants. A call target that is
+    itself a call is a child node, so it is bounded on its own."""
+    name = node.func.id if isinstance(node.func, ast.Name) else ""
+    if name in {"factorial", "binomial", "Integer", "Rational"} and node.keywords:
+        # evaluate=..., or the value itself as i=..., would skip the checks
+        # below; refuse them.
+        raise SafeParserError(f"Keyword arguments to {name} are not admitted")
+    if name == "Float":
+        return _float_value(node, args, values)
+    if any(isinstance(arg, _FLOAT_KINDS) for arg in args):
+        # A float can carry a huge exponent (2.0**1000000000), so turning it
+        # into an exact number, or a factorial or binomial of it, cannot be
+        # bounded. Any other function of a float may be exact or huge.
+        if name in _EXACT_CONVERSIONS:
+            raise SafeParserError(_COST_ERROR)
+        return _FLOAT_RESULT
+    if name in _VALUED_CALLS:
+        return _VALUED_CALLS[name](args)
+    if name == "Symbol" or any(arg is None for arg in args):
+        return None
+    sizes = [_size(arg) for arg in args] or [1]
+    if name in _GROWING_FUNCTIONS:
+        # |exp(x)| <= e**|x| and |x| < 2**bits, so the result has at most
+        # 1.45 * 2**bits bits.
+        if max(sizes) > 20:
+            raise SafeParserError(_COST_ERROR)
+        return _Approx(int(1.45 * 2 ** max(sizes)) + 1)
+    return _Approx(sum(sizes) + 2)
+
+
+def _unit_power(left: Fraction, right: _Value) -> _Value:
+    """0, 1 or -1 to any power: no larger than the base."""
+    if isinstance(right, Fraction) and right.denominator == 1:
+        return None if left == 0 and right < 0 else left ** int(right)
+    return _Approx(2)
+
+
+def _constant_power(left: _Value, right: Fraction) -> _Value:
+    """A constant base to a known exponent."""
+    if right.denominator != 1:
+        # A root of a constant: SymPy may fold it exactly, so keep a bound.
+        return _Approx(_size(left) * abs(right.numerator) // right.denominator + 1)
+    if abs(right) > MAX_INTEGER_BITS or _size(left) * abs(right) > MAX_INTEGER_BITS:
+        raise SafeParserError(_COST_ERROR)
+    if isinstance(left, _Approx):
+        return _Approx(left.bits * abs(int(right)))
+    return left ** int(right)
+
+
+def _pow_value(left: _Value, right: _Value) -> _Value:
+    if right is None:
+        return None  # a symbolic exponent stays symbolic
+    if isinstance(left, Fraction) and left in (0, 1, -1):
+        return _unit_power(left, right)
+    if left is None:
+        return None  # a symbolic base stays symbolic
+    if isinstance(right, _Approx):
+        raise SafeParserError(_COST_ERROR)  # a constant exponent it cannot bound
+    return _constant_power(left, right)
+
+
+def _exact_binop(op: ast.operator, left: Fraction, right: Fraction) -> _Value:
+    if isinstance(op, ast.Add):
+        return _bounded(left + right)
+    if isinstance(op, ast.Sub):
+        return _bounded(left - right)
+    if isinstance(op, ast.Mult):
+        if _bits(left) + _bits(right) > MAX_INTEGER_BITS:
+            raise SafeParserError(_COST_ERROR)
+        return left * right
+    if right == 0:
+        return None
+    if isinstance(op, ast.Div):
+        return _bounded(left / right)
+    if isinstance(op, ast.FloorDiv):
+        return _bounded(Fraction(left // right))
+    if isinstance(op, ast.Mod):
+        return _bounded(left % right)
+    return None
+
+
+def _float_result_binop(op: ast.operator, left: _Value, right: _Value) -> _Value:
+    """Arithmetic with a function-of-float result. A power is refused when
+    that result is the exponent of an exact base other than 0, 1 or -1, or
+    the base of an exponent other than 0, 1 or -1: either could be an exact
+    number of unbounded size."""
+    if isinstance(op, ast.Pow):
+        if right is _FLOAT_RESULT and not (
+            left is _FLOAT or (isinstance(left, Fraction) and left in (0, 1, -1))
+        ):
+            raise SafeParserError(_COST_ERROR)
+        if left is _FLOAT_RESULT and not (
+            isinstance(right, Fraction) and right in (0, 1, -1)
+        ):
+            raise SafeParserError(_COST_ERROR)
+    return _FLOAT_RESULT
+
+
+def _binop_value(op: ast.operator, left: _Value, right: _Value) -> _Value:
+    if left is None or right is None:
+        return None  # symbolic: SymPy keeps it symbolic
+    if left is _FLOAT_RESULT or right is _FLOAT_RESULT:
+        return _float_result_binop(op, left, right)
+    if left is _FLOAT or right is _FLOAT:
+        return _FLOAT  # float arithmetic keeps a fixed precision
+    if isinstance(op, ast.Pow):
+        return _pow_value(left, right)
+    if isinstance(left, Fraction) and isinstance(right, Fraction):
+        return _exact_binop(op, left, right)
+    if isinstance(op, (ast.Add, ast.Sub)):
+        return _Approx(max(_size(left), _size(right)) + 1)
+    return _Approx(_size(left) + _size(right))
+
+
+def _node_value(node: ast.AST, values: dict) -> _Value:
+    """The value or size bound of ``node`` from its children's, or None
+    when it depends on a symbol."""
+    if isinstance(node, ast.Constant):
+        value = node.value
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if isinstance(value, float):
+            return _FLOAT
+        return _bounded(Fraction(value))
+    if isinstance(node, ast.Name):
+        return _Approx(2) if node.id in _CONSTANT_NAMES else None
+    if isinstance(node, ast.UnaryOp):
+        operand = values.get(id(node.operand))
+        if isinstance(node.op, ast.USub) and isinstance(operand, Fraction):
+            return -operand
+        return operand
+    if isinstance(node, ast.BinOp):
+        return _binop_value(
+            node.op, values.get(id(node.left)), values.get(id(node.right))
+        )
+    if isinstance(node, ast.Call):
+        return _call_value(node, [values.get(id(arg)) for arg in node.args], values)
+    return None
+
+
+# Cap for the collapse bound, so the arithmetic below stays small.
+_BOUND_CAP = 10 * MAX_INTEGER_BITS
+
+
+def _collapse_bits(node: ast.AST, values: dict, bounds: dict) -> int:
+    """An upper bound, in bits, on the number ``node`` could evaluate to if
+    its symbols cancelled out (SymPy turns ``x - x`` into 0 while building
+    the expression). A lone symbol counts as 0 bits (it never becomes a
+    constant by itself); constants count their size.
+    """
+    value = values.get(id(node))
+    if isinstance(value, Fraction):
+        return _bits(value)
+    if isinstance(value, _Approx):
+        return value.bits
+    children = [bounds.get(id(child), 0) for child in ast.iter_child_nodes(node)]
+    if isinstance(node, ast.BinOp):
+        left, right = bounds.get(id(node.left), 0), bounds.get(id(node.right), 0)
+        if isinstance(node.op, (ast.Add, ast.Sub)):
+            return min(max(left, right) + 1, _BOUND_CAP)
+        if isinstance(node.op, ast.Pow):
+            return min(left * 2 ** min(right, 64), _BOUND_CAP)
+        divisor = values.get(id(node.right))
+        if isinstance(node.op, ast.Div) and isinstance(divisor, Fraction):
+            # Dividing by p/q multiplies by q/p, so the value can grow by
+            # up to the bits of q: (x - x + 1)/(1/10**9) is 10**9.
+            grow = divisor.denominator.bit_length()
+            return min(left + grow, _BOUND_CAP)
+        return min(left + right, _BOUND_CAP)
+    if isinstance(node, ast.Call):
+        name = node.func.id if isinstance(node.func, ast.Name) else ""
+        largest = max(children, default=0)
+        if name == "factorial":
+            # n! has fewer than n*log2(n) bits, and n < 2**largest.
+            return min(2 ** min(largest, 64) * max(largest, 1), _BOUND_CAP)
+        if name == "binomial":
+            # binomial(n, k) <= 2**n, and n < 2**largest.
+            return min(2 ** min(largest, 64), _BOUND_CAP)
+        if name in _GROWING_FUNCTIONS:
+            # exp(k*log(n) + x - x) is n**k once x - x cancels.
+            return min(int(1.45 * 2 ** min(largest, 64)) + 1, _BOUND_CAP)
+        return min(sum(children) + 2, _BOUND_CAP)
+    return max(children, default=0)
+
+
+def _check_symbolic_counting(node: ast.AST, values: dict, bounds: dict) -> None:
+    """factorial(x - x + 100000000) is factorial(100000000) once SymPy
+    cancels x - x, so a symbolic argument is bounded by what it could
+    collapse to."""
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"factorial", "binomial"}
+    ):
+        return
+    limit = MAX_FACTORIAL_ARGUMENT.bit_length()
+    for arg in node.args:
+        if values.get(id(arg)) is None and bounds.get(id(arg), 0) > limit:
+            raise SafeParserError(_COST_ERROR)
+
+
+def _check_symbolic_power(node: ast.AST, values: dict, bounds: dict) -> None:
+    """A power with a symbolic side is bounded by what it could collapse to:
+    2**(10**10 + x - x) is 2**(10**10) once SymPy cancels x - x."""
+    if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)):
+        return
+    left, right = values.get(id(node.left)), values.get(id(node.right))
+    if left is not None and right is not None:
+        return
+    if isinstance(left, Fraction) and left in (0, 1, -1):
+        return
+    base_bits = bounds.get(id(node.left), 0)
+    exponent_bits = bounds.get(id(node.right), 0)
+    if base_bits <= 1:
+        return  # a symbol, or something that can only collapse to 0, 1 or -1
+    if exponent_bits > 64 or base_bits * 2**exponent_bits > MAX_INTEGER_BITS:
+        raise SafeParserError(_COST_ERROR)
+
+
+def _check_evaluation_cost(code: str) -> None:
+    """Refuse code whose constant arithmetic would exceed the cost bounds.
+
+    The walk is iterative, so a long flat expression cannot exhaust the
+    recursion limit.
+    """
+    try:
+        tree = ast.parse(code, mode="eval")
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
+        raise SafeParserError(f"Expression could not be checked: {exc}") from exc
+    values: dict = {}
+    bounds: dict = {}
+    stack = [(tree.body, False)]
+    while stack:
+        node, children_done = stack.pop()
+        if children_done:
+            _check_symbolic_power(node, values, bounds)
+            _check_symbolic_counting(node, values, bounds)
+            values[id(node)] = _node_value(node, values)
+            bounds[id(node)] = _collapse_bits(node, values, bounds)
+            continue
+        stack.append((node, True))
+        stack.extend((child, False) for child in ast.iter_child_nodes(node))
+
 
 _DENYLIST_PATTERN = re.compile(
     r"(?:"
@@ -58,9 +512,23 @@ _SAFE_GLOBAL_DICT_TEMPLATE: Dict[str, Any] = {"__builtins__": {}}
 # (``'__glo'+'bals'+'__'``) both bypass it, and PEP 3131 NFKC identifier
 # normalization makes ASCII-only matching unsound.
 _ALLOWED_AST_NODES = (
-    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Call, ast.Name, ast.Load,
-    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod, ast.FloorDiv,
-    ast.USub, ast.UAdd, ast.Constant, ast.keyword,
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Call,
+    ast.Name,
+    ast.Load,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.Pow,
+    ast.Mod,
+    ast.FloorDiv,
+    ast.USub,
+    ast.UAdd,
+    ast.Constant,
+    ast.keyword,
 )
 
 _IMPLICIT_FORBIDDEN_CHARS = re.compile(r"""['"`,\[\]{}:;\\]""")
@@ -82,9 +550,7 @@ def _validate_ast_nodes(expression: str) -> None:
         # the transformed code.  Attribute access ("." not used as a
         # decimal point) is likewise never legitimate in math input.
         if _IMPLICIT_FORBIDDEN_CHARS.search(expression):
-            raise SafeParserError(
-                "Expression contains disallowed construct"
-            )
+            raise SafeParserError("Expression contains disallowed construct")
         for i, ch in enumerate(expression):
             if ch == "." and not (
                 (i > 0 and expression[i - 1].isdigit())
@@ -102,45 +568,85 @@ def _validate_ast_nodes(expression: str) -> None:
         # String/bytes literals are concatenation gadgets; math
         # expressions never need them.
         if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
-            raise SafeParserError(
-                "Expression contains disallowed string literal"
-            )
+            raise SafeParserError("Expression contains disallowed string literal")
 
 
 def _build_safe_local_dict(
     extra_symbols: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     safe: Dict[str, Any] = {
-        "x": Symbol("x"), "y": Symbol("y"), "z": Symbol("z"),
-        "a": Symbol("a"), "b": Symbol("b"), "c": Symbol("c"),
-        "d": Symbol("d"), "f": Symbol("f"), "g": Symbol("g"),
-        "h": Symbol("h"), "k": Symbol("k"), "m": Symbol("m"),
+        "x": Symbol("x"),
+        "y": Symbol("y"),
+        "z": Symbol("z"),
+        "a": Symbol("a"),
+        "b": Symbol("b"),
+        "c": Symbol("c"),
+        "d": Symbol("d"),
+        "f": Symbol("f"),
+        "g": Symbol("g"),
+        "h": Symbol("h"),
+        "k": Symbol("k"),
+        "m": Symbol("m"),
         "n": Symbol("n", integer=True, positive=True),
-        "p": Symbol("p"), "q": Symbol("q"), "r": Symbol("r"),
-        "s": Symbol("s"), "t": Symbol("t"), "u": Symbol("u"),
-        "v": Symbol("v"), "w": Symbol("w"),
-        "alpha": Symbol("alpha"), "beta": Symbol("beta"),
-        "gamma": Symbol("gamma"), "delta": Symbol("delta"),
-        "epsilon": Symbol("epsilon"), "zeta": Symbol("zeta"),
-        "eta": Symbol("eta"), "theta": Symbol("theta"),
-        "iota": Symbol("iota"), "kappa": Symbol("kappa"),
-        "mu": Symbol("mu"), "nu": Symbol("nu"),
-        "xi": Symbol("xi"), "omicron": Symbol("omicron"),
-        "rho": Symbol("rho"), "sigma": Symbol("sigma"),
-        "tau": Symbol("tau"), "phi": Symbol("phi"),
-        "chi": Symbol("chi"), "psi": Symbol("psi"),
+        "p": Symbol("p"),
+        "q": Symbol("q"),
+        "r": Symbol("r"),
+        "s": Symbol("s"),
+        "t": Symbol("t"),
+        "u": Symbol("u"),
+        "v": Symbol("v"),
+        "w": Symbol("w"),
+        "alpha": Symbol("alpha"),
+        "beta": Symbol("beta"),
+        "gamma": Symbol("gamma"),
+        "delta": Symbol("delta"),
+        "epsilon": Symbol("epsilon"),
+        "zeta": Symbol("zeta"),
+        "eta": Symbol("eta"),
+        "theta": Symbol("theta"),
+        "iota": Symbol("iota"),
+        "kappa": Symbol("kappa"),
+        "mu": Symbol("mu"),
+        "nu": Symbol("nu"),
+        "xi": Symbol("xi"),
+        "omicron": Symbol("omicron"),
+        "rho": Symbol("rho"),
+        "sigma": Symbol("sigma"),
+        "tau": Symbol("tau"),
+        "phi": Symbol("phi"),
+        "chi": Symbol("chi"),
+        "psi": Symbol("psi"),
         "omega": Symbol("omega"),
-        "pi": pi, "e": E, "E": E, "I": I, "oo": oo,
-        "sin": sympy.sin, "cos": sympy.cos, "tan": sympy.tan,
-        "cot": sympy.cot, "sec": sympy.sec, "csc": sympy.csc,
-        "asin": sympy.asin, "acos": sympy.acos, "atan": sympy.atan,
+        "pi": pi,
+        "e": E,
+        "E": E,
+        "I": I,
+        "oo": oo,
+        "sin": sympy.sin,
+        "cos": sympy.cos,
+        "tan": sympy.tan,
+        "cot": sympy.cot,
+        "sec": sympy.sec,
+        "csc": sympy.csc,
+        "asin": sympy.asin,
+        "acos": sympy.acos,
+        "atan": sympy.atan,
         "atan2": sympy.atan2,
-        "sinh": sympy.sinh, "cosh": sympy.cosh, "tanh": sympy.tanh,
-        "log": sympy.log, "ln": sympy.log, "exp": sympy.exp,
-        "sqrt": sympy.sqrt, "cbrt": sympy.cbrt,
-        "abs": sympy.Abs, "Abs": sympy.Abs,
-        "factorial": sympy.factorial, "binomial": sympy.binomial,
-        "Integer": Integer, "Float": Float, "Rational": Rational,
+        "sinh": sympy.sinh,
+        "cosh": sympy.cosh,
+        "tanh": sympy.tanh,
+        "log": sympy.log,
+        "ln": sympy.log,
+        "exp": sympy.exp,
+        "sqrt": sympy.sqrt,
+        "cbrt": sympy.cbrt,
+        "abs": sympy.Abs,
+        "Abs": sympy.Abs,
+        "factorial": sympy.factorial,
+        "binomial": sympy.binomial,
+        "Integer": Integer,
+        "Float": Float,
+        "Rational": Rational,
         "Symbol": Symbol,
     }
     if extra_symbols:
@@ -190,6 +696,11 @@ def safe_parse_expr(
             convert_xor,
         )
     global_dict = dict(_SAFE_GLOBAL_DICT_TEMPLATE)
+    try:
+        code = stringify_expr(stripped, local_dict, global_dict, transformations)
+    except Exception as exc:
+        raise SafeParserError(f"Expression could not be checked: {exc}") from exc
+    _check_evaluation_cost(code)
     try:
         return parse_expr(
             stripped,
