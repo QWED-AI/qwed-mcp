@@ -129,6 +129,11 @@ def sql_issues(
 
 
 _CLOSERS = {"'": "'", '"': '"', "`": "`"}
+# Line breaks other than a newline. PostgreSQL ends a '--' comment at a lone
+# carriage return and MySQL does not, so text after one is code to one
+# database and comment to the other. The others are refused as well, rather
+# than assuming how each database reads them.
+_LINE_BREAKS = frozenset("\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
 # Brackets quote identifiers only in these dialects; elsewhere they are
 # array subscripts and their contents are scanned like any other text.
 _BRACKET_DIALECTS = frozenset({"tsql", "sqlite"})
@@ -160,7 +165,16 @@ def _comment_end(query: str, start: int):
         if following and not following.isspace():
             return "'--' not followed by whitespace is not admitted"
         newline = query.find("\n", start)
-        return len(query) if newline == -1 else newline + 1
+        end = len(query) if newline == -1 else newline
+        text = query[start:end]
+        if text.endswith("\r"):
+            text = text[:-1]  # a CRLF ends the comment for every database
+        if any(ch in _LINE_BREAKS for ch in text):
+            return (
+                "Line break other than a newline inside a '--' comment"
+                " is not admitted"
+            )
+        return end if newline == -1 else newline + 1
     if query.startswith("/*", start):
         return "Block comment is not admitted"
     if query[start] == "#":
@@ -172,10 +186,12 @@ def _lexical_issues(query: str, dialect: Optional[str] = None) -> List[str]:
     """Comment and quoting forms that databases do not read the same way.
 
     A ``--`` comment is kept only when whitespace follows it (MySQL reads
-    ``--x`` as two minus signs). Block comments are refused because MySQL runs
-    the text of ``/*! ... */``, ``#`` because only some databases read it as a
-    comment, and a backslash inside a quoted string because only some
-    databases read it as an escape.
+    ``--x`` as two minus signs) and no line break other than a newline is
+    inside it (databases disagree on where such a comment ends). Block
+    comments are refused because MySQL runs the text of ``/*! ... */``,
+    ``#`` because only some databases read it as a comment, and a backslash
+    inside a quoted string because only some databases read it as an
+    escape.
     """
     closers = dict(_CLOSERS)
     if (dialect or "").lower() in _BRACKET_DIALECTS:

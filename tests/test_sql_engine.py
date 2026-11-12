@@ -102,6 +102,32 @@ def test_quoted_tautology_after_comment_is_still_refused():
     assert result["verified"] is False
 
 
+# Databases end a '--' comment at different line breaks: PostgreSQL also at a
+# lone carriage return, MySQL only at a newline. Text after such a break is
+# code to one and comment to the other, so the comment is refused.
+LINE_BREAK_IN_COMMENT = [
+    ("SELECT * FROM users WHERE id = 1 -- note\rOR 1=1", "mysql"),
+    ("SELECT * FROM users WHERE id = 1 -- note\rOR 1=1", None),
+    ("SELECT * FROM users WHERE id = 1 -- note\x0bOR 1=1", None),
+    ("SELECT * FROM users WHERE id = 1 -- note\x0cOR 1=1", None),
+    ("SELECT * FROM users WHERE id = 1 -- note\u2028OR 1=1", None),
+]
+
+
+@pytest.mark.parametrize("query,dialect", LINE_BREAK_IN_COMMENT)
+def test_line_break_other_than_newline_in_comment_is_refused(query, dialect):
+    result = verify_sql_query(query, dialect=dialect)
+    assert result["verified"] is False
+
+
+@pytest.mark.parametrize("dialect", [None, "mysql", "postgres"])
+def test_comment_ended_by_crlf_is_admitted(dialect):
+    query = "SELECT id FROM users -- active only\r\nWHERE active = 1"
+    result = verify_sql_query(query, dialect=dialect)
+    assert result["issues"] == []
+    assert result["verified"] is True
+
+
 # #27: quoted and qualified identifiers name the table they read.
 TABLE_REFUSED = [
     ("SELECT * FROM `secret_table`", ["users"], "mysql"),
