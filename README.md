@@ -266,6 +266,21 @@ Yes! The server is extensible. Fork it and add your custom `@mcp.tool()` functio
 
 ## 🗺️ Roadmap
 
+### ✅ Released (v0.3.0)
+- [x] `execute_python_code` admits code by allowlist instead of a denylist: only listed modules, builtins and attributes (see [What code is admitted](#what-code-is-admitted))
+- [x] Only UTF-8 source encodings are admitted, and admitted code runs in isolated mode (`python -I`). Fixes GHSA-425c-p25c-qxwh and GHSA-qj7c-h9rh-qppc
+- [x] Math engine refuses unknown operations, and expressions whose evaluation would exceed a size bound, before SymPy evaluates them
+- [x] Logic engine reports `PROVEN`, `DISPROVEN` or `UNVERIFIABLE`; a statement it cannot read is `UNVERIFIABLE`
+- [x] SQL engine parses the query with sqlglot instead of matching patterns, and the code engine's `sql` branch gives the same verdict
+- [x] Skill provenance: registries are allowlisted by default, and digests are checked against the content
+- [x] Dependencies: declares `anyio` and `sqlglot`; no longer installs `qwed-finance`, `qwed-ucp` or `httpx`
+- [x] Release pipeline: actions pinned by SHA, publishing gated on CI and image scans, Docker image with Ubuntu security updates and pinned build inputs
+
+#### Upgrading from 0.2.x
+- Code that 0.2.x ran may now be refused: anything that imports a module outside the allowlist (`os`, `pathlib`, `requests`, QWED SDK packages and other third-party packages), calls `open`, `eval`, `getattr` or another refused builtin, or reads a private or special attribute. The refusal lists the reason.
+- `qwed-finance`, `qwed-ucp` and `httpx` are no longer installed with qwed-mcp. Install them yourself if your own code imports them.
+- Library users: logic results carry `verification_mode`, and the math, logic and SQL engines report input they cannot decide as refused or `UNVERIFIABLE` instead of returning a verdict for it.
+
 ### ✅ Released (v0.2.3)
 - [x] Context bloat resolution (RFC-9728 compatibility)
 - [x] Unified `execute_python_code` environment
