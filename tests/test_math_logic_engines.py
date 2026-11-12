@@ -89,6 +89,22 @@ def test_conditional_binds_looser_than_and():
     assert result["verification_mode"] == "PROVEN"
 
 
+def test_not_binds_tighter_than_and():
+    # "if not A and B then C" has the condition (not A) and B.
+    result = verify_logic_statement(["if not A and B then C", "not A", "not B"], "C")
+    assert result["verification_mode"] == "DISPROVEN"
+    result = verify_logic_statement(["not A and B"], "B")
+    assert result["verification_mode"] == "PROVEN"
+
+
+@pytest.mark.parametrize(
+    "expression,value",
+    [("binomial(-3, 2)", 6), ("binomial(-3, 3)", -10), ("binomial(10, 3)", 120)],
+)
+def test_binomial_values_match_sympy(expression, value):
+    assert safe_parse_expr(expression) == value
+
+
 def test_keyword_arguments_to_factorial_are_refused():
     with pytest.raises(SafeParserError):
         safe_parse_expr("factorial(100000000, evaluate=True)")

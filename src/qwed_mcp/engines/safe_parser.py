@@ -72,8 +72,35 @@ def _binomial_value(n: Fraction, k: Fraction) -> Optional[Fraction]:
     n_int, k_int = int(n), int(k)
     if n_int >= 0:
         return _bounded(Fraction(math.comb(n_int, k_int)))
-    # binomial(-m, k) = (-1)**k * binomial(m + k - 1, k)
-    return _bounded(Fraction((-1) ** k_int * math.comb(-n_int + k_int - 1, k_int)))
+    # For a negative n the value is the sign of k times the binomial of
+    # (k - n - 1) and k.
+    sign = -1 if k_int % 2 else 1
+    return _bounded(Fraction(sign * math.comb(k_int - n_int - 1, k_int)))
+
+
+def _integer_value(args: list) -> Optional[Fraction]:
+    if len(args) == 1 and args[0].denominator == 1:
+        return args[0]
+    return None
+
+
+def _rational_value(args: list) -> Optional[Fraction]:
+    if len(args) == 1:
+        return args[0]
+    if len(args) == 2 and args[1] != 0:
+        return _bounded(args[0] / args[1])
+    return None
+
+
+# Calls whose value on constant arguments is computed (and bounded) here,
+# keyed by name and argument count.
+_VALUED_CALLS = {
+    ("factorial", 1): lambda args: _factorial_value(args[0]),
+    ("binomial", 2): lambda args: _binomial_value(args[0], args[1]),
+    ("Integer", 1): _integer_value,
+    ("Rational", 1): _rational_value,
+    ("Rational", 2): _rational_value,
+}
 
 
 def _call_value(node: ast.Call, args: list) -> Optional[Fraction]:
@@ -86,17 +113,8 @@ def _call_value(node: ast.Call, args: list) -> Optional[Fraction]:
         raise SafeParserError(f"Keyword arguments to {name} are not admitted")
     if node.keywords or any(arg is None for arg in args):
         return None
-    if name == "factorial" and len(args) == 1:
-        return _factorial_value(args[0])
-    if name == "binomial" and len(args) == 2:
-        return _binomial_value(args[0], args[1])
-    if name == "Integer" and len(args) == 1 and args[0].denominator == 1:
-        return args[0]
-    if name == "Rational" and len(args) in (1, 2):
-        if len(args) == 2 and args[1] == 0:
-            return None
-        return _bounded(args[0] / args[1]) if len(args) == 2 else args[0]
-    return None
+    compute = _VALUED_CALLS.get((name, len(args)))
+    return compute(args) if compute else None
 
 
 def _node_value(node: ast.AST, values: dict) -> Optional[Fraction]:

@@ -71,8 +71,6 @@ class _StatementParser:
         if stmt.startswith("if ") and " then " in stmt:
             left, right = stmt[3:].split(" then ", 1)
             return z3.Implies(self.parse(left), self.parse(right))
-        if stmt.startswith("not "):
-            return z3.Not(self.parse(stmt[4:]))
         if " implies " in stmt:
             left, right = stmt.split(" implies ", 1)
             return z3.Implies(self.parse(left), self.parse(right))
@@ -80,6 +78,10 @@ class _StatementParser:
             return z3.And([self.parse(part) for part in stmt.split(" and ")])
         if " or " in stmt:
             return z3.Or([self.parse(part) for part in stmt.split(" or ")])
+        # "not" binds tighter than the connectives above: "not A and B" is
+        # (not A) and B.
+        if stmt.startswith("not "):
+            return z3.Not(self.parse(stmt[4:]))
         if " are " in stmt:  # "all X are Y"
             left, right = stmt.split(" are ", 1)
             return z3.Implies(
