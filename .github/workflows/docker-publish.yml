@@ -14,7 +14,9 @@ env:
 
 jobs:
   build-and-scan:
-    runs-on: ubuntu-latest
+    # Depot runner: the image build is the slowest step of any check in this
+    # repository. The other workflows stay on GitHub-hosted runners.
+    runs-on: depot-ubuntu-24.04-4
     permissions:
       contents: write
       actions: read
@@ -41,6 +43,16 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Set up Docker Buildx
+        # The docker-container builder can read and write the GitHub Actions
+        # layer cache used by the build steps below.
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Set the apt refresh date
+        # A new value each day invalidates the apt layers, so cached builds
+        # still apply Ubuntu security updates (Dockerfile ARG APT_REFRESH).
+        run: echo "APT_REFRESH=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+
       - name: Extract metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
@@ -55,6 +67,12 @@ jobs:
           load: true
           tags: ${{ env.IMAGE_NAME }}:test
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: APT_REFRESH=${{ env.APT_REFRESH }}
+          # Release tags build every layer fresh. The cache is still
+          # written, so the push below reuses exactly these layers.
+          no-cache: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Generate SBOM
         uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
@@ -129,3 +147,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Same build arguments and cache as the scanned build, so the
+          # pushed image is built from the layers that were scanned.
+          build-args: APT_REFRESH=${{ env.APT_REFRESH }}
+          cache-from: type=gha

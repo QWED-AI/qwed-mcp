@@ -1,0 +1,2 @@
+# The Dockerfile checks this key by its sha256, so keep its bytes as committed.
+docker/deadsnakes-ppa.asc text eol=lf
