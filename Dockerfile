@@ -22,8 +22,11 @@ COPY docker/deadsnakes-ppa.asc /etc/apt/keyrings/deadsnakes.asc
 RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
     apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates build-essential && \
-    echo "81d7d4b75f5592f0070e3137ae15d149a44a64d4f91e22defc3800d759eadbde  /etc/apt/keyrings/deadsnakes.asc" | sha256sum -c - && \
-    echo 'deb [signed-by=/etc/apt/keyrings/deadsnakes.asc] https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble main' \
+    printf '%s  %s\n' \
+    81d7d4b75f5592f0070e3137ae15d149a44a64d4f91e22defc3800d759eadbde \
+    /etc/apt/keyrings/deadsnakes.asc | sha256sum -c - && \
+    echo 'deb [signed-by=/etc/apt/keyrings/deadsnakes.asc]' \
+    'https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble main' \
     > /etc/apt/sources.list.d/deadsnakes.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -87,8 +90,11 @@ RUN echo "apt refresh: ${APT_REFRESH}" && \
     echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
     apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates && \
-    echo "81d7d4b75f5592f0070e3137ae15d149a44a64d4f91e22defc3800d759eadbde  /etc/apt/keyrings/deadsnakes.asc" | sha256sum -c - && \
-    echo 'deb [signed-by=/etc/apt/keyrings/deadsnakes.asc] https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble main' \
+    printf '%s  %s\n' \
+    81d7d4b75f5592f0070e3137ae15d149a44a64d4f91e22defc3800d759eadbde \
+    /etc/apt/keyrings/deadsnakes.asc | sha256sum -c - && \
+    echo 'deb [signed-by=/etc/apt/keyrings/deadsnakes.asc]' \
+    'https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble main' \
     > /etc/apt/sources.list.d/deadsnakes.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
