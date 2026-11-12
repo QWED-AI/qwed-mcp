@@ -6,7 +6,10 @@ WORKDIR /app
 
 # Install Python 3.14 from Deadsnakes PPA on a safe OS (bypasses Debian 12 zlib CVEs).
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# No APT download retries: a retried download is the path the apt advisory
+# fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
+RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
+    apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common build-essential && \
     add-apt-repository ppa:deadsnakes/ppa -y && \
     apt-get update && \
@@ -55,12 +58,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 # afterwards to remove transitive system python3-cryptography (41.0.7) and
 # python3-jwt (2.7.0) that Docker Scout flags as vulnerable.
 # Our app uses venv-installed cryptography>=48.0.0 and PyJWT>=2.12.0.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt-get upgrade applies Ubuntu security updates released after the pinned
+# base image (for example apt 2.8.4ubuntu0.1, which the image scanners flag).
+# No APT download retries: a retried download is the path the apt advisory
+# fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
+RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
+    apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common && \
     add-apt-repository ppa:deadsnakes/ppa -y && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     python3.14 && \
+    apt-get upgrade -y --no-install-recommends && \
     dpkg-query -W -f='${Package} ${Version}\n' > /var/log/apt-upgraded-packages.txt && \
     apt-get purge -y --auto-remove software-properties-common && \
     rm -rf /var/lib/apt/lists/*
