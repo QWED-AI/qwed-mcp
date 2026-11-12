@@ -5,6 +5,7 @@ refutations), #26 ('is' statements that dropped an operand) and the parser
 half of #25 (eagerly evaluated huge integers).
 """
 
+import sys
 import time
 
 import pytest
@@ -215,3 +216,10 @@ def test_math_engine_reports_cost_bound_as_unparseable():
     result = verify_math_expression("10**10**10", "0", "evaluate")
     assert result["verified"] is False
     assert "cost bound" in result["error"]
+
+
+def test_missing_solver_is_unverifiable(monkeypatch):
+    monkeypatch.setitem(sys.modules, "z3", None)
+    result = verify_logic_statement(["A implies B", "A"], "B")
+    assert result["verified"] is False
+    assert result["verification_mode"] == "UNVERIFIABLE"
