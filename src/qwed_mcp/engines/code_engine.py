@@ -106,8 +106,23 @@ def verify_code_safety(code: str, language: str) -> dict:
     }
 
 
-# PEP 263: a coding declaration on either of the first two lines.
-_CODING_DECLARATION = re.compile(r"^[ 	]*#.*?coding[:=][ 	]*([-\w.]+)")
+# PEP 263 coding declaration: a comment line naming a codec.
+_CODING_DECLARATION = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)")
+
+
+def _candidate_lines(code: str) -> set:
+    """Every line of ``code`` under each way of splitting it into lines.
+
+    The interpreter reads a declaration only on the first two lines of the
+    file, but str.splitlines() breaks lines at characters (form feed,
+    U+001C to U+001E, U+2028) where the tokenizer does not, and the reverse
+    holds for a lone carriage return. Checking every line under every split
+    avoids depending on which one the interpreter uses.
+    """
+    lines = set(code.splitlines())
+    lines.update(code.split("\n"))
+    lines.update(re.split(r"\r\n|\r|\n", code))
+    return lines
 
 
 def _source_encoding_issues(code: str) -> List[str]:
@@ -117,7 +132,7 @@ def _source_encoding_issues(code: str) -> List[str]:
     script file it is written to by its coding declaration. Under any other
     codec the code that runs would not be the code that was checked.
     """
-    for line in code.splitlines()[:2]:
+    for line in sorted(_candidate_lines(code)):
         match = _CODING_DECLARATION.match(line)
         if not match:
             continue
