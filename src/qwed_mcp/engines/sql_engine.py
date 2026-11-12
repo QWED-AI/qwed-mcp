@@ -120,11 +120,15 @@ def sql_issues(
 
     root = statements[0]
     issues: List[str] = []
-    issues.extend(_statement_issues(root))
-    issues.extend(_condition_issues(root, dialect))
-    issues.extend(_function_issues(root))
-    if allowed_tables is not None:
-        issues.extend(_table_issues(root, allowed_tables, dialect))
+    try:
+        issues.extend(_statement_issues(root))
+        issues.extend(_condition_issues(root, dialect))
+        issues.extend(_function_issues(root))
+        if allowed_tables is not None:
+            issues.extend(_table_issues(root, allowed_tables, dialect))
+    except RecursionError:
+        # A tree too deep to walk is refused, not passed or raised.
+        return ["Query is too deeply nested to check, no assurance produced"]
     return list(dict.fromkeys(issues))
 
 

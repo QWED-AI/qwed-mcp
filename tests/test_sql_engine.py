@@ -483,3 +483,17 @@ def test_code_engine_sql_branch_matches_the_sql_engine(query):
     sql_result = verify_sql_query(query)
     assert code_result["verified"] is sql_result["verified"]
     assert code_result["issues"] == sql_result["issues"]
+
+
+def test_analysis_that_runs_out_of_recursion_is_refused(monkeypatch):
+    # The parse is guarded; the checks after it must be too, so a tree too
+    # deep to walk is refused rather than raising out of the verifier.
+    from qwed_mcp.engines import sql_engine
+
+    def too_deep(*args, **kwargs):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(sql_engine, "_condition_issues", too_deep)
+    result = verify_sql_query("SELECT * FROM users WHERE id = 1")
+    assert result["verified"] is False
+    assert result["issues"]
