@@ -68,6 +68,9 @@ jobs:
           tags: ${{ env.IMAGE_NAME }}:test
           labels: ${{ steps.meta.outputs.labels }}
           build-args: APT_REFRESH=${{ env.APT_REFRESH }}
+          # Release tags build every layer fresh. The cache is still
+          # written, so the push below reuses exactly these layers.
+          no-cache: ${{ startsWith(github.ref, 'refs/tags/v') }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

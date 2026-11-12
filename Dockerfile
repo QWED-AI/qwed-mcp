@@ -14,10 +14,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 # fixed in 2.8.4ubuntu0.1 needs, and this stage starts on the older apt.
 # No APT_REFRESH here: this stage is not shipped, and refreshing it daily
 # would rebuild the dependency and wheel layers below every day.
+# The deadsnakes PPA signing key is kept in the repository and pinned by
+# hash (fingerprint F23C5A6CF475977595C89F51BA6932366A755776). apt trusts it
+# for this one source only (signed-by), and the build does not depend on the
+# Launchpad API that add-apt-repository calls.
+COPY docker/deadsnakes-ppa.asc /etc/apt/keyrings/deadsnakes.asc
 RUN echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
     apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common build-essential && \
-    add-apt-repository ppa:deadsnakes/ppa -y && \
+    ca-certificates build-essential && \
+    echo "81d7d4b75f5592f0070e3137ae15d149a44a64d4f91e22defc3800d759eadbde  /etc/apt/keyrings/deadsnakes.asc" | sha256sum -c - && \
+    echo 'deb [signed-by=/etc/apt/keyrings/deadsnakes.asc] https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble main' \
+    > /etc/apt/sources.list.d/deadsnakes.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     python3.14 python3.14-venv && \
@@ -60,10 +67,14 @@ WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install Python 3.14 runtime on pristine Ubuntu 24.04.
-# software-properties-common is needed only for add-apt-repository; purge it
-# afterwards to remove transitive system python3-cryptography (41.0.7) and
-# python3-jwt (2.7.0) that Docker Scout flags as vulnerable.
-# Our app uses venv-installed cryptography>=48.0.0 and PyJWT>=2.12.0.
+# software-properties-common (add-apt-repository) is not installed, so the
+# system python3-cryptography and python3-jwt that Docker Scout flags never
+# enter the image. Our app uses venv-installed cryptography>=48.0.0 and
+# PyJWT>=2.12.0.
+# The deadsnakes PPA signing key is kept in the repository and pinned by
+# hash (fingerprint F23C5A6CF475977595C89F51BA6932366A755776). apt trusts it
+# for this one source only (signed-by), and the build does not depend on the
+# Launchpad API that add-apt-repository calls.
 # apt-get upgrade applies Ubuntu security updates released after the pinned
 # base image (for example apt 2.8.4ubuntu0.1, which the image scanners flag).
 # No APT download retries: a retried download is the path the apt advisory
@@ -71,17 +82,19 @@ ENV DEBIAN_FRONTEND=noninteractive
 # APT_REFRESH (the date, set by the workflow) rebuilds this shipped layer
 # once a day, so cached builds still get Ubuntu security updates.
 ARG APT_REFRESH=none
+COPY docker/deadsnakes-ppa.asc /etc/apt/keyrings/deadsnakes.asc
 RUN echo "apt refresh: ${APT_REFRESH}" && \
     echo 'Acquire::Retries "0";' > /etc/apt/apt.conf.d/80-disable-retries && \
     apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common && \
-    add-apt-repository ppa:deadsnakes/ppa -y && \
+    ca-certificates && \
+    echo "81d7d4b75f5592f0070e3137ae15d149a44a64d4f91e22defc3800d759eadbde  /etc/apt/keyrings/deadsnakes.asc" | sha256sum -c - && \
+    echo 'deb [signed-by=/etc/apt/keyrings/deadsnakes.asc] https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble main' \
+    > /etc/apt/sources.list.d/deadsnakes.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     python3.14 && \
     apt-get upgrade -y --no-install-recommends && \
     dpkg-query -W -f='${Package} ${Version}\n' > /var/log/apt-upgraded-packages.txt && \
-    apt-get purge -y --auto-remove software-properties-common && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv
