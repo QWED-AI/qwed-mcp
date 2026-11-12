@@ -190,8 +190,25 @@ _VALUED_CALLS = {
 }
 
 
+# The decimal exponent of a float literal. SymPy turns '1e-1000000000' into
+# an exact rational with a denominator of 10**1000000000 while parsing.
+_FLOAT_EXPONENT = re.compile(r"[eE]([+-]?\d+)")
+
+
+def _check_float_literal(node: ast.Call) -> None:
+    first = node.args[0] if node.args else None
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        match = _FLOAT_EXPONENT.search(first.value)
+        if match and abs(int(match.group(1))) > MAX_FLOAT_DIGITS:
+            raise SafeParserError(_COST_ERROR)
+        if len(first.value) > MAX_FLOAT_DIGITS:
+            raise SafeParserError(_COST_ERROR)
+
+
 def _float_value(node: ast.Call, args: list, values: dict) -> _Value:
-    """Float(x[, dps[, precision]]): refuse a precision beyond the bound."""
+    """Float(x[, dps[, precision]]): refuse a precision beyond the bound,
+    and a literal whose decimal exponent is beyond it."""
+    _check_float_literal(node)
     requested = list(zip(("dps", "precision"), args[1:]))
     requested += [(kw.arg, values.get(id(kw.value))) for kw in node.keywords]
     for key, value in requested:
@@ -205,8 +222,9 @@ def _call_value(node: ast.Call, args: list, values: dict) -> _Value:
     """The value or size bound of a call on constants. A call target that is
     itself a call is a child node, so it is bounded on its own."""
     name = node.func.id if isinstance(node.func, ast.Name) else ""
-    if name in {"factorial", "binomial"} and node.keywords:
-        # evaluate=... and the like change what SymPy computes; refuse them.
+    if name in {"factorial", "binomial", "Integer", "Rational"} and node.keywords:
+        # evaluate=..., or the value itself as i=..., would skip the checks
+        # below; refuse them.
         raise SafeParserError(f"Keyword arguments to {name} are not admitted")
     if name == "Float":
         return _float_value(node, args, values)
@@ -216,7 +234,10 @@ def _call_value(node: ast.Call, args: list, values: dict) -> _Value:
         # bounded. Anything else of a float is a float.
         if name in {"Integer", "Rational", "factorial", "binomial"}:
             raise SafeParserError(_COST_ERROR)
-        return _FLOAT
+        # Other functions of a float can still give an exact number
+        # (sin(0.0) is exactly 0), so their result is a bounded constant,
+        # not a float.
+        return _Approx(64)
     if name in _VALUED_CALLS:
         return _VALUED_CALLS[name](args)
     if name == "Symbol" or any(arg is None for arg in args):

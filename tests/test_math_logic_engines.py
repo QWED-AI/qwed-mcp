@@ -112,9 +112,17 @@ def test_or_binds_looser_than_and():
     assert result["verification_mode"] == "PROVEN"
 
 
-def test_keyword_arguments_to_factorial_are_refused():
-    with pytest.raises(SafeParserError):
-        safe_parse_expr("factorial(100000000, evaluate=True)")
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "factorial(100000000, evaluate=True)",
+        "Integer(i=2.0**10000000000)",
+        "Rational(p=10, q=1)**1000000000",
+    ],
+)
+def test_keyword_arguments_to_counting_and_constructors_are_refused(expression):
+    with pytest.raises(SafeParserError, match="Keyword arguments"):
+        safe_parse_expr(expression)
 
 
 def test_premises_must_be_a_list_of_strings():
@@ -173,6 +181,10 @@ def test_premises_must_be_a_list_of_strings():
         "binomial(-1, 1e8)",
         # a named constant is a constant: sin(pi) evaluates to 0
         "factorial(100000000 + sin(pi))",
+        # float literals and functions of floats
+        "1e-1000000000",
+        "1E+5000000",
+        "2**(10000000000 + sin(0.0))",
         "2**pi",
     ],
 )
@@ -214,6 +226,8 @@ def test_expression_beyond_cost_bound_is_refused_quickly(expression):
         "binomial(Rational(1, 2), 3)",
         "2**0.5",
         "pi**2",
+        "1e-300",
+        "sin(0.5) + 1.5",
         "Float(1/3, 50)",
         "1.5**1000000",
     ],
