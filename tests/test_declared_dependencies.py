@@ -5,7 +5,11 @@ and every declared dependency is imported or is a documented version floor
 import ast
 import re
 import sys
-from importlib.metadata import packages_distributions
+from importlib.metadata import (
+    PackageNotFoundError,
+    distribution,
+    packages_distributions,
+)
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,14 +43,27 @@ def _imported_top_level_modules() -> set:
     return modules
 
 
+def _distributions_of(module: str, mapping: dict) -> list:
+    """The installed distributions providing ``module``. Some installers
+    leave a distribution out of packages_distributions(), so a distribution
+    named after the module is accepted too."""
+    if module in mapping:
+        return mapping[module]
+    try:
+        return [distribution(module).metadata["Name"]]
+    except PackageNotFoundError:
+        raise AssertionError(f"'{module}' is imported but not installed") from None
+
+
 def _third_party_distributions() -> set:
     mapping = packages_distributions()
     distributions = set()
     for module in _imported_top_level_modules():
         if module in sys.stdlib_module_names or module == "qwed_mcp":
             continue
-        assert module in mapping, f"'{module}' is imported but not installed"
-        distributions.update(_normalise(name) for name in mapping[module])
+        distributions.update(
+            _normalise(name) for name in _distributions_of(module, mapping)
+        )
     return distributions
 
 
