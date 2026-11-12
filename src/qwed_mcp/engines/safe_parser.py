@@ -10,6 +10,7 @@ Security fix for GHSA-mw6r-2hvm-4rp2 (CWE-94).
 """
 
 import ast
+import math
 import re
 import unicodedata
 from fractions import Fraction
@@ -53,15 +54,42 @@ def _bounded(value: Fraction) -> Fraction:
     return value
 
 
-def _call_value(node: ast.Call, args: list) -> Optional[Fraction]:
-    """The value of Integer(...) and Rational(...) calls on bounded
-    constants; refuse factorial and binomial of a constant above the bound."""
-    name = node.func.id if isinstance(node.func, ast.Name) else ""
-    known = [arg for arg in args if arg is not None]
-    if len(known) != len(args) or node.keywords:
-        return None
-    if name in {"factorial", "binomial"} and args and args[0] > MAX_FACTORIAL_ARGUMENT:
+def _factorial_value(n: Fraction) -> Optional[Fraction]:
+    if n.denominator != 1 or n < 0:
+        return None  # SymPy gives zoo or a gamma value, not a big integer
+    if n > MAX_FACTORIAL_ARGUMENT:
         raise SafeParserError(_COST_ERROR)
+    return _bounded(Fraction(math.factorial(int(n))))
+
+
+def _binomial_value(n: Fraction, k: Fraction) -> Optional[Fraction]:
+    # SymPy multiplies k factors for a negative or non-integer n, so both
+    # arguments are bounded, not only n.
+    if abs(n) > MAX_FACTORIAL_ARGUMENT or abs(k) > MAX_FACTORIAL_ARGUMENT:
+        raise SafeParserError(_COST_ERROR)
+    if n.denominator != 1 or k.denominator != 1 or k < 0:
+        return None
+    n_int, k_int = int(n), int(k)
+    if n_int >= 0:
+        return _bounded(Fraction(math.comb(n_int, k_int)))
+    # binomial(-m, k) = (-1)**k * binomial(m + k - 1, k)
+    return _bounded(Fraction((-1) ** k_int * math.comb(-n_int + k_int - 1, k_int)))
+
+
+def _call_value(node: ast.Call, args: list) -> Optional[Fraction]:
+    """The value of Integer, Rational, factorial and binomial calls on
+    bounded constants, refusing those beyond the bounds. A call target that
+    is itself a call is a child node, so it is bounded on its own."""
+    name = node.func.id if isinstance(node.func, ast.Name) else ""
+    if name in {"factorial", "binomial"} and node.keywords:
+        # evaluate=... and the like change what SymPy computes; refuse them.
+        raise SafeParserError(f"Keyword arguments to {name} are not admitted")
+    if node.keywords or any(arg is None for arg in args):
+        return None
+    if name == "factorial" and len(args) == 1:
+        return _factorial_value(args[0])
+    if name == "binomial" and len(args) == 2:
+        return _binomial_value(args[0], args[1])
     if name == "Integer" and len(args) == 1 and args[0].denominator == 1:
         return args[0]
     if name == "Rational" and len(args) in (1, 2):

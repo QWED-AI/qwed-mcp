@@ -72,12 +72,26 @@ def test_invalid_argument_is_disproven():
         (["A and not"], "A"),
         (["not"], "A"),
         (["A or and"], "A"),
+        (["A"], "A or not"),
     ],
 )
 def test_unreadable_statement_is_unverifiable(premises, conclusion):
     result = verify_logic_statement(premises, conclusion)
     assert result["verified"] is False
     assert result["verification_mode"] == "UNVERIFIABLE"
+
+
+def test_conditional_binds_looser_than_and():
+    # "if A then B and C" is A -> (B and C): C does not follow on its own.
+    result = verify_logic_statement(["if A then B and C"], "C")
+    assert result["verification_mode"] == "DISPROVEN"
+    result = verify_logic_statement(["if A then B and C", "A"], "C")
+    assert result["verification_mode"] == "PROVEN"
+
+
+def test_keyword_arguments_to_factorial_are_refused():
+    with pytest.raises(SafeParserError):
+        safe_parse_expr("factorial(100000000, evaluate=True)")
 
 
 def test_premises_must_be_a_list_of_strings():
@@ -111,6 +125,12 @@ def test_premises_must_be_a_list_of_strings():
         "Integer(10)**1000000000",
         "factorial(Integer(100000000))",
         "Rational(10, 1)**1000000000",
+        # factorial and binomial values feed the bounds of what contains them
+        "factorial(1000)**1000",
+        "binomial(1000, 500)**2000",
+        "factorial(100000000)(1)",
+        "binomial(-1, 100000000)",
+        "2x + 100_000_000!",
     ],
 )
 def test_expression_beyond_cost_bound_is_refused_quickly(expression):
@@ -139,6 +159,9 @@ def test_expression_beyond_cost_bound_is_refused_quickly(expression):
         "2x**(10**9)",
         "Integer(10)**100",
         "Rational(1, 3)**2",
+        "factorial(20)**2",
+        "binomial(10, 3)",
+        "binomial(x, 3)",
     ],
 )
 def test_bounded_expression_still_parses(expression):
@@ -149,9 +172,10 @@ def test_long_flat_expression_is_a_parser_error_or_a_result():
     # A flat sum deeper than the recursion limit must not leak RecursionError.
     expression = "+".join(["1"] * 1200)
     try:
-        assert safe_parse_expr(expression) == 1200
-    except SafeParserError:
-        pass
+        outcome = safe_parse_expr(expression)
+    except SafeParserError as exc:
+        outcome = exc
+    assert outcome == 1200 or isinstance(outcome, SafeParserError)
 
 
 def test_math_engine_reports_cost_bound_as_unparseable():
