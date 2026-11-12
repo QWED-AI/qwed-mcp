@@ -196,3 +196,26 @@ def test_unsupported_language_is_not_verified():
     result = verify_code_safety("x", "ruby")
     assert result["verified"] is False
     assert "Unsupported language" in result["message"]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "# -*- coding: utf-7 -*-\nprint('x')",
+        "#!/usr/bin/env python\n# vim: set fileencoding=latin-1 :\nprint('x')",
+        "# coding=no-such-codec\nprint('x')",
+    ],
+)
+def test_source_encoding_other_than_utf8_is_refused(code):
+    # The interpreter decodes the script file by its coding declaration, so
+    # under another codec the code that runs is not the code that was checked.
+    result = verify_code_safety(code, "python")
+    assert result["verified"] is False
+    assert any("encoding declaration" in issue for issue in result["issues"])
+
+
+@pytest.mark.parametrize(
+    "code", ["# -*- coding: utf-8 -*-\nprint('x')", "# coding: UTF8\nprint('x')"]
+)
+def test_utf8_encoding_declaration_is_admitted(code):
+    assert verify_code_safety(code, "python")["verified"] is True

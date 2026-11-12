@@ -72,6 +72,8 @@ Quit completely (system tray → Quit) and reopen.
 
 ### Step 4: Test it!
 
+Code execution is off by default: until the server administrator sets `QWED_MCP_TRUSTED_CODE_EXECUTION=true` in the server's environment (for example with an `"env": {"QWED_MCP_TRUSTED_CODE_EXECUTION": "true"}` entry next to `"command"` above), `execute_python_code` answers `BLOCKED_ADMIN_POLICY` and runs nothing. Admitted code then runs with the server's privileges, so only turn it on where that is acceptable.
+
 Ask Claude:
 > "Write a python script that checks a 10,000 investment at 7.5% for 5 years with the `decimal` module, and run it using `execute_python_code`."
 
@@ -98,7 +100,7 @@ If you see an `"Unknown tool"` error, it means Claude is trying to use a legacy 
 
 | Tool | Description | Use Case |
 |------|-------------|----------|
-| `execute_python_code` | **Subprocess Execution** | The single entrypoint for all QWED capabilities. Executes dynamically generated Python code in a subprocess with restricted environment variables, after an allowlist admission check (below). Note: Runs with server privileges; ensure inputs are trusted. |
+| `execute_python_code` | **Subprocess Execution** | The single tool the server registers. Executes dynamically generated Python code in a subprocess with restricted environment variables, after an allowlist admission check (below). Note: Runs with server privileges; ensure inputs are trusted. |
 
 ### What code is admitted
 
@@ -108,7 +110,7 @@ Before any code runs, the server parses it and admits it only when every module,
 - **Builtins:** only builtins that compute. `open`, `eval`, `exec`, `compile`, `__import__`, `getattr`, `vars`, `globals`, `type`, `input`, `breakpoint` and the rest are refused wherever they appear, so they cannot be rebound or passed on.
 - **Attributes:** no special or private attribute (`__x__`, `_x`) apart from reading `__init__` and `__name__`, no frame or traceback attribute, and `str.format` only on a string literal whose fields read no attribute.
 
-Admission is a static check of what the code can reach. It is not a proof that the code is correct, and it does not bound CPU or memory use (the execution timeout does that). Refused code is reported with the reason and never runs. The output of admitted code comes from that code, so treat it as untrusted data.
+Admission is a static check of what the code can reach. It is not a proof that the code is correct, and it does not limit resource use: the execution timeout limits run time, and nothing limits memory. Refused code is reported with the reason and never runs. The output of admitted code comes from that code, so treat it as untrusted data.
 
 ---
 
@@ -163,10 +165,8 @@ Read the user terms in the attached document.
 
 | Without QWED-MCP | With QWED-MCP |
 |------------------|---------------|
-| LLM calculates → 95% correct | Executes Python script calling `qwed_finance` → **100% correct** |
-| LLM writes SQL → might inject | Script uses `qwed_new` analyzer → **injection detected** |
-| LLM reasons → might be wrong | Z3 solver executed via SDK → **formally proven** |
-| LLM codes → might be unsafe | AST check script executed → **security checked** |
+| LLM calculates in its reply → may slip or round | Script computes it with `decimal` or `fractions` → **exact arithmetic, shown in the output** |
+| LLM writes code → might reach files, network or processes | Code is checked against the allowlist first → **refused before it runs** |
 
 ---
 

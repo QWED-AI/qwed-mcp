@@ -137,7 +137,8 @@ async def execute_python_code_tool(arguments: dict[str, Any]) -> tuple[bool, lis
     try:
         temp_dir = anyio.Path(tempfile.gettempdir())
         script_path_obj = temp_dir / f"qwed_exec_{uuid.uuid4().hex}.py"
-        await script_path_obj.write_text(code)
+        # UTF-8, the encoding the code engine admitted the code under.
+        await script_path_obj.write_text(code, encoding="utf-8")
         script_path = str(script_path_obj)
         
         # Create a restricted environment (stripping SENTRY_DSN, keys, etc.)

@@ -212,11 +212,10 @@ _FORMAT_METHODS: FrozenSet[str] = _names("format format_map")
 _Scope = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
 
 # Type parameters (Python 3.12+) bind names too.
-_TYPE_PARAMS = tuple(
-    getattr(ast, name)
-    for name in ("TypeVar", "ParamSpec", "TypeVarTuple")
-    if hasattr(ast, name)
-)
+try:
+    _TYPE_PARAMS: tuple = (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple)
+except AttributeError:  # Python < 3.12 has no type parameters
+    _TYPE_PARAMS = ()
 
 
 def _is_special(name: str) -> bool:

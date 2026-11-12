@@ -7,6 +7,7 @@ only and is never admitted.
 """
 
 import ast
+import codecs
 import re
 import logging
 from typing import List
@@ -105,8 +106,38 @@ def verify_code_safety(code: str, language: str) -> dict:
     }
 
 
+# PEP 263: a coding declaration on either of the first two lines.
+_CODING_DECLARATION = re.compile(r"^[ 	]*#.*?coding[:=][ 	]*([-\w.]+)")
+
+
+def _source_encoding_issues(code: str) -> List[str]:
+    """Refuse a source encoding declaration other than UTF-8.
+
+    The checks below read ``code`` as text, but the interpreter decodes the
+    script file it is written to by its coding declaration. Under any other
+    codec the code that runs would not be the code that was checked.
+    """
+    for line in code.splitlines()[:2]:
+        match = _CODING_DECLARATION.match(line)
+        if not match:
+            continue
+        try:
+            codec = codecs.lookup(match.group(1)).name
+        except LookupError:
+            codec = ""
+        if codec != "utf-8":
+            return [
+                f"Source encoding declaration '{match.group(1)}' is not admitted "
+                "(only UTF-8)"
+            ]
+    return []
+
+
 def analyze_python(code: str) -> List[str]:
     """Why Python ``code`` is not admitted; an empty list when it is."""
+    encoding_issues = _source_encoding_issues(code)
+    if encoding_issues:
+        return encoding_issues
     try:
         tree = ast.parse(code)
     except SyntaxError as e:
