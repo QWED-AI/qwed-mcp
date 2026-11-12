@@ -763,6 +763,7 @@ dependencies = [
     { name = "qwed-finance" },
     { name = "qwed-ucp" },
     { name = "sentry-sdk" },
+    { name = "sqlglot" },
     { name = "sympy" },
     { name = "z3-solver" },
 ]
@@ -786,6 +787,7 @@ requires-dist = [
     { name = "qwed-finance", specifier = ">=1.2.0" },
     { name = "qwed-ucp", specifier = ">=0.2.0" },
     { name = "sentry-sdk", specifier = ">=2.13.0" },
+    { name = "sqlglot", specifier = ">=30.7.0,<31" },
     { name = "sympy", specifier = ">=1.12" },
     { name = "z3-solver", specifier = ">=4.12.0.0" },
 ]

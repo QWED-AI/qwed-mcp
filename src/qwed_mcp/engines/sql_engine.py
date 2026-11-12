@@ -1,134 +1,288 @@
 """
 SQL Verification Engine
 
-Validates SQL queries for injection and schema compliance.
+Validates a SQL query by parsing it, not by matching patterns in its text.
+A query passes only when it parses as exactly one statement of an admitted
+kind (SELECT, INSERT, UPDATE or DELETE), and none of the checks below finds
+an issue. Anything the parser cannot read is refused, so the absence of a
+finding is never taken for an assurance about text that was not analysed.
 """
 
-import re
 import logging
-from typing import List, Optional
+from typing import Iterable, List, Optional
+
+import sqlglot
+from sqlglot import exp
+from sqlglot.errors import SqlglotError
 
 logger = logging.getLogger("qwed-mcp.engines.sql")
 
-# Dangerous SQL patterns
-DANGEROUS_PATTERNS = [
-    r"DROP\s+TABLE",
-    r"DROP\s+DATABASE",
-    r"DELETE\s+FROM\s+\w+\s*;?\s*$",  # DELETE without WHERE
-    r"TRUNCATE\s+TABLE",
-    r"ALTER\s+TABLE",
-    r"CREATE\s+USER",
-    r"GRANT\s+",
-    r"EXEC\s*\(",
-    r"EXECUTE\s*\(",
-    r"xp_cmdshell",
-    r"sp_executesql",
-]
+# Statement kinds that may appear anywhere other than the root. A nested DML
+# statement (WITH d AS (DELETE ... RETURNING *) SELECT ...) is refused too.
+_STATEMENT_TYPES = (
+    exp.Alter,
+    exp.Analyze,
+    exp.Attach,
+    exp.Cache,
+    exp.Command,
+    exp.Commit,
+    exp.Copy,
+    exp.Create,
+    exp.Delete,
+    exp.Describe,
+    exp.Detach,
+    exp.Drop,
+    exp.Grant,
+    exp.Insert,
+    exp.Install,
+    exp.Kill,
+    exp.LoadData,
+    exp.Merge,
+    exp.Pragma,
+    exp.Refresh,
+    exp.Revoke,
+    exp.Rollback,
+    exp.Set,
+    exp.Transaction,
+    exp.TruncateTable,
+    exp.Uncache,
+    exp.Update,
+    exp.Use,
+)
 
-# Injection patterns
-INJECTION_PATTERNS = [
-    r"'\s*OR\s+'1'\s*=\s*'1",
-    r"'\s*OR\s+1\s*=\s*1",
-    r"'\s*;\s*--",
-    r"UNION\s+ALL\s+SELECT",
-    r"UNION\s+SELECT",
-    r"/\*.*\*/",
-    r"--[^\n]*",
-    r"'\s*OR\s+''='",
-]
+_ROOT_TYPES = (exp.Select, exp.Insert, exp.Update, exp.Delete)
 
-# Tautology patterns
-TAUTOLOGY_PATTERNS = [
-    r"1\s*=\s*1",
-    r"'a'\s*=\s*'a'",
-    r"1\s*<>\s*0",
-    r"0\s*=\s*0",
-]
+# Boolean connectives a condition is split on before its parts are checked.
+_CONNECTIVES = (exp.And, exp.Or, exp.Xor)
 
 
 def verify_sql_query(
     query: str,
-    allowed_tables: Optional[List[str]] = None
+    allowed_tables: Optional[List[str]] = None,
+    dialect: Optional[str] = None,
 ) -> dict:
     """
-    Verify SQL query for injection vulnerabilities and schema compliance.
-    
+    Verify a SQL query for injection patterns and schema compliance.
+
     Args:
         query: The SQL query to verify
-        allowed_tables: Optional list of allowed table names
-    
+        allowed_tables: Optional list of allowed table names. A name may be
+            qualified (``schema.table``); an unqualified name matches the
+            table part of a qualified one.
+        dialect: Optional sqlglot dialect to parse with (for example
+            ``"mysql"`` for backtick-quoted identifiers). The default is the
+            dialect-neutral parser.
+
     Returns:
         Verification result with issues if any
     """
-    issues = []
-    
-    # Check for dangerous patterns
-    for pattern in DANGEROUS_PATTERNS:
-        if re.search(pattern, query, re.IGNORECASE):
-            issues.append(f"Dangerous operation detected: {pattern}")
-    
-    # Check for injection patterns
-    for pattern in INJECTION_PATTERNS:
-        if re.search(pattern, query, re.IGNORECASE):
-            issues.append(f"Potential SQL injection: {pattern}")
-    
-    # Check for tautology patterns (common in injection)
-    for pattern in TAUTOLOGY_PATTERNS:
-        if re.search(pattern, query, re.IGNORECASE):
-            issues.append(f"Suspicious tautology detected: {pattern}")
-    
-    # Check table access if allowed_tables is specified
-    if allowed_tables:
-        tables_in_query = extract_tables(query)
-        unauthorized = [t for t in tables_in_query if t.lower() not in [a.lower() for a in allowed_tables]]
-        if unauthorized:
-            issues.append(f"Unauthorized table access: {', '.join(unauthorized)}")
-    
-    # Check for missing WHERE clause on UPDATE/DELETE
-    if re.search(r"UPDATE\s+\w+\s+SET\s+", query, re.IGNORECASE):
-        if not re.search(r"WHERE\s+", query, re.IGNORECASE):
-            issues.append("Warning: UPDATE without WHERE clause")
-    
-    if re.search(r"DELETE\s+FROM\s+\w+", query, re.IGNORECASE):
-        if not re.search(r"WHERE\s+", query, re.IGNORECASE):
-            issues.append("Warning: DELETE without WHERE clause")
-    
+    issues = sql_issues(query, allowed_tables=allowed_tables, dialect=dialect)
     if issues:
         return {
             "verified": False,
             "message": f"Found {len(issues)} issue(s) in SQL query",
-            "issues": issues
+            "issues": issues,
         }
+    return {
+        "verified": True,
+        "message": "SQL query passed verification",
+        "issues": [],
+    }
+
+
+def sql_issues(
+    query: str,
+    allowed_tables: Optional[List[str]] = None,
+    dialect: Optional[str] = None,
+) -> List[str]:
+    """Why ``query`` does not pass; an empty list when it does."""
+    if not isinstance(query, str) or not query.strip():
+        return ["Empty query: nothing was analysed, no assurance produced"]
+
+    lexical = _lexical_issues(query)
+    if lexical:
+        return lexical
+
+    try:
+        statements = [
+            statement
+            for statement in sqlglot.parse(query, read=dialect)
+            if statement is not None
+        ]
+    except (SqlglotError, ValueError, RecursionError) as e:
+        return [f"Query could not be parsed, no assurance produced: {type(e).__name__}"]
+
+    if len(statements) != 1:
+        return [
+            f"Expected exactly one SQL statement, found {len(statements)}: "
+            "no assurance produced"
+        ]
+
+    root = statements[0]
+    issues: List[str] = []
+    issues.extend(_statement_issues(root))
+    issues.extend(_condition_issues(root))
+    issues.extend(_function_issues(root))
+    if allowed_tables:
+        issues.extend(_table_issues(root, allowed_tables))
+    return list(dict.fromkeys(issues))
+
+
+def _lexical_issues(query: str) -> List[str]:
+    """Comment and quoting forms that databases do not read the same way.
+
+    A ``--`` comment is kept only when whitespace follows it (MySQL reads
+    ``--x`` as two minus signs). Block comments are refused because MySQL runs
+    the text of ``/*! ... */``, ``#`` because only some databases read it as a
+    comment, and a backslash inside a quoted string because only some
+    databases read it as an escape.
+    """
+    closers = {"'": "'", '"': '"', "`": "`", "[": "]"}
+    i, n = 0, len(query)
+    while i < n:
+        ch = query[i]
+        if ch in closers:
+            closer = closers[ch]
+            j = i + 1
+            while True:
+                if j >= n:
+                    return ["Unterminated quoted string or identifier"]
+                if ch in "'\"" and query[j] == "\\":
+                    return ["Backslash inside a string literal is not admitted"]
+                if query[j] == closer:
+                    if j + 1 < n and query[j + 1] == closer and ch != "[":
+                        j += 2  # doubled quote is an escaped quote
+                        continue
+                    break
+                j += 1
+            i = j + 1
+            continue
+        if query.startswith("--", i):
+            if i + 2 < n and not query[i + 2].isspace():
+                return ["'--' not followed by whitespace is not admitted"]
+            newline = query.find("\n", i)
+            i = n if newline == -1 else newline + 1
+            continue
+        if query.startswith("/*", i):
+            return ["Block comment is not admitted"]
+        if ch == "#":
+            return ["'#' outside a string is not admitted"]
+        i += 1
+    return []
+
+
+def _statement_issues(root: exp.Expression) -> List[str]:
+    issues = []
+    if not isinstance(root, _ROOT_TYPES):
+        issues.append(
+            f"Statement type {type(root).__name__.upper()} is not admitted "
+            "(only SELECT, INSERT, UPDATE and DELETE)"
+        )
+    if isinstance(root, exp.Select) and root.args.get("into"):
+        issues.append("SELECT ... INTO is not admitted")
+    if isinstance(root, (exp.Update, exp.Delete)) and not root.args.get("where"):
+        kind = "UPDATE" if isinstance(root, exp.Update) else "DELETE"
+        issues.append(f"Warning: {kind} without WHERE clause")
+    for node in root.find_all(_STATEMENT_TYPES):
+        if node is not root:
+            issues.append(
+                f"Nested {type(node).__name__.upper()} statement is not admitted"
+            )
+    for node in root.find_all(exp.SetOperation):
+        issues.append(f"Set operation {type(node).__name__.upper()} is not admitted")
+    return issues
+
+
+def _condition_parts(condition: exp.Expression) -> Iterable[exp.Expression]:
+    """The parts of a condition joined by AND/OR/XOR, through NOT and parens."""
+    if isinstance(condition, _CONNECTIVES):
+        yield from _condition_parts(condition.this)
+        yield from _condition_parts(condition.expression)
+    elif isinstance(condition, (exp.Not, exp.Paren)):
+        yield from _condition_parts(condition.this)
     else:
-        return {
-            "verified": True,
-            "message": "SQL query passed verification",
-            "issues": []
-        }
+        yield condition
 
 
-def extract_tables(query: str) -> List[str]:
-    """Extract table names from SQL query."""
-    tables = []
-    
-    # FROM clause
-    from_match = re.findall(r"FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)", query, re.IGNORECASE)
-    tables.extend(from_match)
-    
-    # JOIN clauses
-    join_match = re.findall(r"JOIN\s+([a-zA-Z_][a-zA-Z0-9_]*)", query, re.IGNORECASE)
-    tables.extend(join_match)
-    
-    # UPDATE clause
-    update_match = re.findall(r"UPDATE\s+([a-zA-Z_][a-zA-Z0-9_]*)", query, re.IGNORECASE)
-    tables.extend(update_match)
-    
-    # INSERT INTO clause
-    insert_match = re.findall(r"INSERT\s+INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)", query, re.IGNORECASE)
-    tables.extend(insert_match)
-    
-    # DELETE FROM clause
-    delete_match = re.findall(r"DELETE\s+FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)", query, re.IGNORECASE)
-    tables.extend(delete_match)
-    
-    return list(set(tables))
+def _data_free(node: exp.Expression) -> bool:
+    """Whether ``node`` reads no column and no bound parameter."""
+    if isinstance(node, (exp.Column, exp.Placeholder, exp.Parameter)):
+        return False
+    return not any(node.find_all(exp.Column, exp.Placeholder, exp.Parameter))
+
+
+def _self_comparison(node: exp.Expression) -> bool:
+    """``x = x`` and the like: true for every row where x is not NULL."""
+    if isinstance(node, (exp.EQ, exp.GTE, exp.LTE)):
+        return node.this == node.expression
+    return False
+
+
+def _condition_issues(root: exp.Expression) -> List[str]:
+    conditions = []
+    for clause in root.find_all(exp.Where, exp.Having):
+        conditions.append(clause.this)
+    for join in root.find_all(exp.Join):
+        if join.args.get("on") is not None:
+            conditions.append(join.args["on"])
+    issues = []
+    for condition in conditions:
+        for part in _condition_parts(condition):
+            if _data_free(part):
+                issues.append(
+                    f"Suspicious tautology detected: constant condition '{part.sql()}'"
+                )
+            elif _self_comparison(part):
+                issues.append(
+                    f"Suspicious tautology detected: self-comparison '{part.sql()}'"
+                )
+    return issues
+
+
+def _function_issues(root: exp.Expression) -> List[str]:
+    """Functions the parser does not know (vendor procedures such as
+    xp_cmdshell, pg_sleep or load_file) are refused rather than guessed."""
+    return [
+        f"Function '{node.name}' is not admitted"
+        for node in root.find_all(exp.Anonymous)
+    ]
+
+
+def _table_issues(root: exp.Expression, allowed_tables: List[str]) -> List[str]:
+    allowed = {name.strip().lower() for name in allowed_tables if name and name.strip()}
+    cte_names = {cte.alias.lower() for cte in root.find_all(exp.CTE) if cte.alias}
+    unauthorized = []
+    for table in root.find_all(exp.Table):
+        name = table.name
+        if not name:
+            return ["Could not determine an accessed table: no assurance produced"]
+        if name.lower() in cte_names and not (
+            table.args.get("db") or table.args.get("catalog")
+        ):
+            continue
+        qualified = ".".join(
+            part.name for part in table.parts if isinstance(part, exp.Identifier)
+        ).lower()
+        if name.lower() not in allowed and qualified not in allowed:
+            unauthorized.append(qualified or name)
+    if unauthorized:
+        return [f"Unauthorized table access: {', '.join(sorted(set(unauthorized)))}"]
+    return []
+
+
+def extract_tables(query: str, dialect: Optional[str] = None) -> List[str]:
+    """Table names (the table part of any qualified name) the query reads or
+    writes; an empty list when the query does not parse."""
+    try:
+        statements = sqlglot.parse(query, read=dialect)
+    except (SqlglotError, ValueError, RecursionError):
+        return []
+    names = set()
+    for statement in statements:
+        if statement is None:
+            continue
+        cte_names = {cte.alias for cte in statement.find_all(exp.CTE) if cte.alias}
+        for table in statement.find_all(exp.Table):
+            if table.name and table.name not in cte_names:
+                names.add(table.name)
+    return sorted(names)
