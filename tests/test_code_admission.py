@@ -210,6 +210,7 @@ def test_unsupported_language_is_not_verified():
         "# a\rb\n# coding: utf-7\nprint('x')",
         "\x0c# coding: latin-1\nprint('x')",
         "#\x1ccoding: utf-7\nprint('x')",
+        "#\x0c\n# coding: utf-7\n# +AAo-print(1)\nprint(1)\n",
     ],
 )
 def test_source_encoding_other_than_utf8_is_refused(code):
@@ -224,6 +225,12 @@ def test_source_encoding_other_than_utf8_is_refused(code):
     "code", ["# -*- coding: utf-8 -*-\nprint('x')", "# coding: UTF8\nprint('x')"]
 )
 def test_utf8_encoding_declaration_is_admitted(code):
+    assert verify_code_safety(code, "python")["verified"] is True
+
+
+def test_declaration_like_text_after_line_two_is_admitted():
+    # Only the first two lines can hold a declaration; later lines are data.
+    code = 'data = """\n\n# coding: latin-1\n"""\nprint(len(data))'
     assert verify_code_safety(code, "python")["verified"] is True
 
 

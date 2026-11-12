@@ -154,7 +154,10 @@ async def execute_python_code_tool(arguments: dict[str, Any]) -> tuple[bool, lis
             popen_kwargs["start_new_session"] = True
 
         proc = await asyncio.create_subprocess_exec(
-            sys.executable, script_path,
+            # -I (isolated mode): the script's directory, the shared temp
+            # directory, is not put on sys.path, so a file planted there cannot
+            # stand in for an admitted module; PYTHON* variables are ignored.
+            sys.executable, "-I", script_path,
             stdin=DEVNULL,
             stdout=PIPE,
             stderr=PIPE,

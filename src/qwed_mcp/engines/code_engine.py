@@ -111,17 +111,17 @@ _CODING_DECLARATION = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)")
 
 
 def _candidate_lines(code: str) -> set:
-    """Every line of ``code`` under each way of splitting it into lines.
+    """The first two lines of ``code`` under each way of splitting it.
 
     The interpreter reads a declaration only on the first two lines of the
-    file, but str.splitlines() breaks lines at characters (form feed,
-    U+001C to U+001E, U+2028) where the tokenizer does not, and the reverse
-    holds for a lone carriage return. Checking every line under every split
-    avoids depending on which one the interpreter uses.
+    file. str.splitlines() breaks lines at characters (form feed, U+001C to
+    U+001E, U+2028) where the tokenizer does not, and a lone carriage return
+    may or may not end a line, so the first two lines are taken under each
+    split and all of them are checked.
     """
-    lines = set(code.splitlines())
-    lines.update(code.split("\n"))
-    lines.update(re.split(r"\r\n|\r|\n", code))
+    lines = set(code.splitlines()[:2])
+    lines.update(code.split("\n")[:2])
+    lines.update(re.split(r"\r\n|\r|\n", code)[:2])
     return lines
 
 
