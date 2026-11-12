@@ -227,11 +227,23 @@ def _condition_parts(condition: exp.Expression) -> Iterable[exp.Expression]:
         yield condition
 
 
+# Nodes that read data or a bound value: a condition holding none of them is
+# constant. COUNT(*) and other aggregates read rows without naming a column.
+_DATA_NODES = (
+    exp.Column,
+    exp.Placeholder,
+    exp.Parameter,
+    exp.Star,
+    exp.AggFunc,
+    exp.Table,
+)
+
+
 def _data_free(node: exp.Expression) -> bool:
-    """Whether ``node`` reads no column and no bound parameter."""
-    if isinstance(node, (exp.Column, exp.Placeholder, exp.Parameter)):
+    """Whether ``node`` reads no data and no bound parameter."""
+    if isinstance(node, _DATA_NODES):
         return False
-    return not any(node.find_all(exp.Column, exp.Placeholder, exp.Parameter))
+    return not any(node.find_all(*_DATA_NODES))
 
 
 def _self_comparison(node: exp.Expression) -> bool:
@@ -280,17 +292,28 @@ def _function_issues(root: exp.Expression) -> List[str]:
     ]
 
 
-def _identifier_key(identifier) -> str:
-    """How a database resolves a name: unquoted identifiers fold to lower
-    case, quoted ones keep their case ("USERS" and users differ)."""
+# Dialects that fold unquoted identifiers to upper case rather than lower.
+_UPPER_FOLDING_DIALECTS = frozenset({"snowflake", "oracle"})
+
+
+def _identifier_key(identifier, dialect: Optional[str] = None) -> str:
+    """How the database resolves a name: an unquoted identifier folds to
+    lower case (upper case for Snowflake and Oracle), a quoted one keeps its
+    case ("USERS" and users differ)."""
     if isinstance(identifier, exp.Identifier):
-        return identifier.name if identifier.quoted else identifier.name.lower()
-    return str(identifier or "").lower()
+        if identifier.quoted:
+            return identifier.name
+        name = identifier.name
+    else:
+        name = str(identifier or "")
+    if (dialect or "").lower() in _UPPER_FOLDING_DIALECTS:
+        return name.upper()
+    return name.lower()
 
 
-def _cte_key(cte: exp.CTE) -> str:
+def _cte_key(cte: exp.CTE, dialect: Optional[str] = None) -> str:
     alias = cte.args.get("alias")
-    return _identifier_key(alias.this if alias is not None else None)
+    return _identifier_key(alias.this if alias is not None else None, dialect)
 
 
 # Dialects where an UPDATE or DELETE may target a CTE (it then writes the
@@ -332,44 +355,53 @@ def _is_cte_reference(table: exp.Table, dialect: Optional[str] = None) -> bool:
         or _is_write_target(table, dialect)
     ):
         return False
-    key = _identifier_key(table.this)
+    key = _identifier_key(table.this, dialect)
     child: exp.Expression = table
     node = table.parent
     while node is not None:
-        if isinstance(node, exp.With):
-            # Inside one CTE of this WITH: only the CTEs declared before it,
-            # and itself when the WITH is recursive.
-            ctes = list(node.expressions)
-            position = next(
-                (i for i, cte in enumerate(ctes) if cte is child), len(ctes)
-            )
-            if node.args.get("recursive"):
-                position += 1
-            if any(_cte_key(cte) == key for cte in ctes[:position]):
-                return True
-        else:
-            # From the main query every CTE of its WITH is visible.
-            for value in node.args.values():
-                if isinstance(value, exp.With) and value is not child:
-                    if any(_cte_key(cte) == key for cte in value.expressions):
-                        return True
+        if _defines_cte(node, child, key, dialect):
+            return True
         child, node = node, node.parent
     return False
 
 
-def _table_allowed(table: exp.Table, allowed: set) -> bool:
+def _defines_cte(
+    node: exp.Expression, child: exp.Expression, key: str, dialect: Optional[str]
+) -> bool:
+    """Whether ``node`` makes a CTE named ``key`` visible to its ``child``."""
+    if isinstance(node, exp.With):
+        # Inside one CTE of this WITH. A recursive WITH lets every CTE see
+        # them all; otherwise only the CTEs declared before it are visible.
+        ctes = list(node.expressions)
+        if not node.args.get("recursive"):
+            ctes = ctes[
+                : next((i for i, c in enumerate(ctes) if c is child), len(ctes))
+            ]
+        return any(_cte_key(cte, dialect) == key for cte in ctes)
+    # From the main query every CTE of its WITH is visible.
+    return any(
+        _cte_key(cte, dialect) == key
+        for value in node.args.values()
+        if isinstance(value, exp.With) and value is not child
+        for cte in value.expressions
+    )
+
+
+def _table_allowed(
+    table: exp.Table, allowed: set, dialect: Optional[str] = None
+) -> bool:
     """Whether ``table`` is in ``allowed``, by its table part or its full
     qualified name.
 
     Allowlist entries are names as the database resolves them: an unquoted
-    reference folds to lower case and a quoted one keeps its case, and the
-    result must equal the entry. So ["users"] admits users, Users and
+    reference folds to lower case (upper case for Snowflake and Oracle) and
+    a quoted one keeps its case, and the result must equal the entry. So ["users"] admits users, Users and
     "users"; ["Users"] admits only "Users". A dot in an entry separates
     qualified parts (schema.table). To allow a table whose own name contains
     a dot, write the entry with double quotes: '"audit.events"'.
     """
     parts = [part for part in table.parts if isinstance(part, exp.Identifier)]
-    keys = [_identifier_key(part) for part in parts]
+    keys = [_identifier_key(part, dialect) for part in parts]
     for entry in allowed:
         if len(entry) > 2 and entry.startswith('"') and entry.endswith('"'):
             if parts[-1].quoted and parts[-1].name == entry[1:-1]:
@@ -392,7 +424,7 @@ def _table_issues(
             return ["Could not determine an accessed table: no assurance produced"]
         if _is_cte_reference(table, dialect):
             continue
-        if not _table_allowed(table, allowed):
+        if not _table_allowed(table, allowed, dialect):
             qualified = ".".join(
                 part.name for part in table.parts if isinstance(part, exp.Identifier)
             )

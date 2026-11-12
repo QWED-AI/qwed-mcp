@@ -279,3 +279,31 @@ def test_tsql_update_through_a_cte_checks_its_body():
     assert verify_sql_query(query, ["users"], dialect="tsql")["verified"] is True
     query = "WITH x AS (SELECT id, flag FROM secret) UPDATE x SET flag = 1 WHERE id = 7"
     assert verify_sql_query(query, ["users"], dialect="tsql")["verified"] is False
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT dept FROM staff GROUP BY dept HAVING COUNT(*) > 1",
+        "SELECT * FROM users WHERE EXISTS (SELECT 1 FROM orders WHERE orders.user_id = users.id)",
+    ],
+)
+def test_aggregates_and_subqueries_read_data(query):
+    assert verify_sql_query(query)["verified"] is True
+
+
+def test_recursive_with_lets_a_cte_reference_a_later_one():
+    query = (
+        "WITH RECURSIVE a AS (SELECT id FROM b), b AS (SELECT id FROM users) "
+        "SELECT * FROM a"
+    )
+    assert verify_sql_query(query, ["users"], dialect="postgres")["verified"] is True
+    assert extract_tables(query, dialect="postgres") == ["users"]
+
+
+def test_snowflake_folds_unquoted_names_to_upper_case():
+    # The unquoted CTE resolves to USERS; the quoted "users" is a stored table.
+    query = 'WITH users AS (SELECT 1 AS id) SELECT * FROM "users"'
+    assert verify_sql_query(query, [], dialect="snowflake")["verified"] is False
+    query = 'WITH users AS (SELECT 1 AS id) SELECT * FROM "USERS"'
+    assert verify_sql_query(query, [], dialect="snowflake")["verified"] is True
