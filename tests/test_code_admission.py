@@ -219,3 +219,61 @@ def test_source_encoding_other_than_utf8_is_refused(code):
 )
 def test_utf8_encoding_declaration_is_admitted(code):
     assert verify_code_safety(code, "python")["verified"] is True
+
+
+def test_class_built_from_a_namespace_cannot_feed_a_class_pattern():
+    code = (
+        "import abc\n"
+        "M = abc.ABCMeta('M', (abc.ABCMeta,), {'__instancecheck__': lambda s, o: True})\n"
+        "C = M('C', (), {'__match_args__': ('__globals__',)})\n"
+        "def f():\n"
+        "    pass\n"
+        "match f:\n"
+        "    case C(g):\n"
+        "        print(g)\n"
+    )
+    result = verify_code_safety(code, "python")
+    assert result["verified"] is False
+    issues = " ".join(result["issues"])
+    assert "ABCMeta" in issues
+    assert "Positional class pattern" in issues
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "match 1:\n    case int(x):\n        print(x)",
+        "match 'a':\n    case str() | bytes():\n        pass",
+    ],
+)
+def test_builtin_class_patterns_are_admitted(code):
+    assert verify_code_safety(code, "python")["verified"] is True
+
+
+def test_positional_pattern_on_user_class_is_refused():
+    code = (
+        "from dataclasses import dataclass\n"
+        "@dataclass\n"
+        "class P:\n"
+        "    x: int\n"
+        "match P(1):\n"
+        "    case P(x):\n"
+        "        print(x)\n"
+    )
+    assert verify_code_safety(code, "python")["verified"] is False
+
+
+def test_name_imported_as_two_modules_is_checked_against_both():
+    # Imports are not scoped by the check, so ``m`` may be either module.
+    code = (
+        "import math as m\n"
+        "def f():\n"
+        "    import json as m\n"
+        "    print(m.dumps({}))\n"
+        "print(m.sqrt(4))"
+    )
+    result = verify_code_safety(code, "python")
+    assert result["verified"] is False
+    issues = " ".join(result["issues"])
+    assert "'sqrt' from module 'json'" in issues
+    assert "'dumps' from module 'math'" in issues

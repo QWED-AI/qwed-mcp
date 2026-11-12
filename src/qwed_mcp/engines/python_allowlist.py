@@ -47,7 +47,9 @@ ADMITTED_MODULES: Dict[str, FrozenSet[str]] = {
         "absolute_import annotations division generator_stop generators "
         "nested_scopes print_function unicode_literals with_statement"
     ),
-    "abc": _names("ABC ABCMeta abstractmethod"),
+    # Not ABCMeta: called with a namespace it builds a class whose special
+    # attributes (__match_args__, __instancecheck__) come from strings.
+    "abc": _names("ABC abstractmethod"),
     "array": _names("array typecodes"),
     "base64": _names(
         "a85decode a85encode b16decode b16encode b32decode b32encode b64decode "
@@ -206,6 +208,13 @@ REFUSED_ATTRIBUTES: FrozenSet[str] = _names(
     "gi_yieldfrom tb_frame tb_next"
 )
 
+# Builtin classes whose positional class pattern matches the subject itself
+# (``case int(x)``). Any other class reads the attributes its __match_args__
+# names, which code can set from strings.
+_SELF_MATCHING_CLASSES: FrozenSet[str] = _names(
+    "bool bytearray bytes dict float frozenset int list set str tuple"
+)
+
 # str.format and format_map read the attribute a field names.
 _FORMAT_METHODS: FrozenSet[str] = _names("format format_map")
 
@@ -248,8 +257,10 @@ class _Admission:
         for parent in ast.walk(tree):
             for child in ast.iter_child_nodes(parent):
                 self.parents[id(child)] = parent
-        # Local name -> dotted module it is bound to by an import.
-        self.modules: Dict[str, str] = {}
+        # Local name -> every dotted module an import binds it to. Imports
+        # are not scoped here, so a name bound to two modules is checked
+        # against both.
+        self.modules: Dict[str, Set[str]] = {}
         # Every name the code binds anywhere, imports included.
         self.bound: Set[str] = set()
 
@@ -297,10 +308,10 @@ class _Admission:
             if not self._module_admitted(node, alias.name):
                 continue
             if alias.asname:
-                self.modules[alias.asname] = alias.name
+                self.modules.setdefault(alias.asname, set()).add(alias.name)
             else:
                 top = alias.name.split(".")[0]
-                self.modules[top] = top
+                self.modules.setdefault(top, set()).add(top)
 
     def _collect_import_from(self, node: ast.ImportFrom) -> None:
         if isinstance(self._scope_of(node), ast.ClassDef):
@@ -316,7 +327,7 @@ class _Admission:
             if alias.name == "*":
                 self.refuse(node, f"Star import from '{module}' is not admitted")
             elif f"{module}.{alias.name}" in ADMITTED_MODULES:
-                self.modules[local] = f"{module}.{alias.name}"
+                self.modules.setdefault(local, set()).add(f"{module}.{alias.name}")
             elif alias.name not in ADMITTED_MODULES[module]:
                 self.refuse(
                     node, f"Name '{alias.name}' from module '{module}' is not admitted"
@@ -356,8 +367,7 @@ class _Admission:
         elif isinstance(node, ast.Attribute):
             self._check_attribute(node)
         elif isinstance(node, ast.MatchClass):
-            for attr in node.kwd_attrs:
-                self._check_attribute_name(node, attr, write=False)
+            self._check_class_pattern(node)
 
     @staticmethod
     def _identifiers(node: ast.AST) -> List[str]:
@@ -400,6 +410,23 @@ class _Admission:
             return
         self.refuse(node, f"Special name '{name}' is not admitted")
 
+    def _check_class_pattern(self, node: ast.MatchClass) -> None:
+        for attr in node.kwd_attrs:
+            self._check_attribute_name(node, attr, write=False)
+        if not node.patterns:
+            return
+        cls = node.cls
+        if not (
+            isinstance(cls, ast.Name)
+            and cls.id in _SELF_MATCHING_CLASSES
+            and cls.id not in self.bound
+        ):
+            self.refuse(
+                node,
+                "Positional class pattern is admitted only on a builtin class "
+                "that matches itself (int, str, list, ...)",
+            )
+
     def _check_name(self, node: ast.Name) -> None:
         name = node.id
         if name in self.modules:
@@ -409,7 +436,8 @@ class _Admission:
                 and isinstance(parent, ast.Attribute)
                 and parent.value is node
             ):
-                self.refuse(node, f"Module '{self.modules[name]}' used as a value")
+                modules = ", ".join(sorted(self.modules[name]))
+                self.refuse(node, f"Module '{modules}' used as a value")
             return
         if not isinstance(node.ctx, ast.Load):
             return
@@ -432,7 +460,8 @@ class _Admission:
                 "fields read no attribute",
             )
         if isinstance(node.value, ast.Name) and node.value.id in self.modules:
-            self._check_module_chain(node, self.modules[node.value.id])
+            for module in sorted(self.modules[node.value.id]):
+                self._check_module_chain(node, module)
 
     def _check_attribute_name(self, node: ast.AST, attr: str, *, write: bool) -> None:
         if attr.startswith("_"):
@@ -444,9 +473,8 @@ class _Admission:
 
     def _check_module_chain(self, node: ast.Attribute, module: str) -> None:
         """``module.a.b``: walk submodules, then require a listed name."""
-        current: ast.AST = node
+        current = node
         while True:
-            assert isinstance(current, ast.Attribute)
             attr = current.attr
             submodule = f"{module}.{attr}"
             if submodule in ADMITTED_MODULES:
