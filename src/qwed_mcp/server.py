@@ -84,7 +84,9 @@ def verify_server_skills():
         result = guard.verify_skill(manifest)
 
         if not result["verified"]:
-            logger.error(f"FATAL: Skill validation failed: {result['message']}")
+            logger.error(
+                "FATAL: Skill validation failed: %s", _log_text(result["message"])
+            )
             sys.exit(1)
 
         logger.info(

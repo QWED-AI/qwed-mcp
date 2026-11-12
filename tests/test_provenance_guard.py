@@ -470,8 +470,9 @@ def test_code_pattern_in_description_is_blocked():
     ],
 )
 def test_blocklist_matches_domains_not_substrings(registry, blocked):
-    guard = SkillProvenanceGuard(trusted_registries={"not-clawdhub.com", "clawdhub-mirror.com"})
-    result = guard.verify_skill(_make_manifest(registry=registry))
+    # Default allowlist: lookalikes fail the allowlist, not the blocklist.
+    result = SkillProvenanceGuard().verify_skill(_make_manifest(registry=registry))
+    assert result["verified"] is False
     is_blocked = any("(blocked:" in f for f in result["findings"])
     assert is_blocked is blocked
 
@@ -479,3 +480,13 @@ def test_blocklist_matches_domains_not_substrings(registry, blocked):
 def test_unlisted_registry_is_refused_by_default():
     result = SkillProvenanceGuard().verify_skill(_make_manifest(registry="example.org"))
     assert result["verified"] is False
+
+
+@pytest.mark.parametrize("digest", ["   ", None])
+def test_content_without_a_digest_is_not_reported_as_verified(digest):
+    manifest = _make_manifest(digest=digest)
+    guard = SkillProvenanceGuard(require_digest=False)
+    result = guard.verify_skill(manifest, content=_CONTENT)
+    assert result["digest_verified"] is False
+    assert result["status"] == "TRUSTED_DIGEST_UNVERIFIED"
+    assert "no digest" in result["message"]

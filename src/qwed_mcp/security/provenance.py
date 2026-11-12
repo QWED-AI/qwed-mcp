@@ -18,13 +18,18 @@ This guard enforces:
 
 Download counts come from the registry being audited, so they are reported
 as advisories and never decide the result (#47).
+
+The registry, source URL and digest are claims the manifest makes about
+itself. The guard checks those claims against its lists and, when given the
+skill's bytes, the digest against them; it does not establish where the
+manifest came from.
 """
 
 import hashlib
 import hmac
 import math
 import re
-from typing import Any, Dict, FrozenSet, List, Optional, Set
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 
@@ -226,9 +231,13 @@ class SkillProvenanceGuard:
 
     def _validate_digest(
         self, manifest: Dict[str, Any], content: Optional[bytes] = None
-    ) -> List[str]:
+    ) -> Tuple[List[str], bool]:
         """Verify the digest is present and well-formed, and when ``content``
-        is given, that it is the digest of those bytes (#30)."""
+        is given, that it is the digest of those bytes (#30).
+
+        Returns the findings and whether a comparison with ``content`` was
+        made and matched.
+        """
         findings: List[str] = []
         digest_val = manifest.get("digest")
 
@@ -238,11 +247,11 @@ class SkillProvenanceGuard:
                     "Missing digest — "
                     "unsigned skills are not allowed"
                 )
-            return findings
+            return findings, False
 
         if not isinstance(digest_val, str):
             findings.append(f"Invalid digest type: {type(digest_val).__name__}")
-            return findings
+            return findings, False
             
         digest_val = digest_val.strip()
         if not digest_val:
@@ -251,7 +260,7 @@ class SkillProvenanceGuard:
                     "Missing digest — "
                     "unsigned skills are not allowed"
                 )
-            return findings
+            return findings, False
 
         # Expected format: "algorithm:hex_digest"
         parts = digest_val.split(":", 1)
@@ -260,7 +269,7 @@ class SkillProvenanceGuard:
                 f"Malformed digest format: {digest_val} "
                 f"(expected 'algorithm:hex_digest')"
             )
-            return findings
+            return findings, False
 
         algo, digest = parts
         algo = algo.lower()
@@ -280,13 +289,14 @@ class SkillProvenanceGuard:
             )
         elif content is not None:
             actual = hashlib.new(algo, content).hexdigest()
-            if not hmac.compare_digest(actual, digest.lower()):
-                findings.append(
-                    "Digest mismatch: the skill content does not match the "
-                    "attested digest"
-                )
+            if hmac.compare_digest(actual, digest.lower()):
+                return findings, True
+            findings.append(
+                "Digest mismatch: the skill content does not match the "
+                "attested digest"
+            )
 
-        return findings
+        return findings, False
 
     def _detect_download_anomalies(
         self, manifest: Dict[str, Any]
@@ -391,21 +401,25 @@ class SkillProvenanceGuard:
         # Run all validation checks
         all_findings.extend(self._validate_registry(manifest))
         all_findings.extend(self._validate_source_url(manifest))
-        all_findings.extend(self._validate_digest(manifest, content))
+        digest_findings, digest_verified = self._validate_digest(manifest, content)
+        all_findings.extend(digest_findings)
         all_findings.extend(self._scan_manifest_content(manifest))
         advisories = self._detect_download_anomalies(manifest)
 
         if not all_findings:
-            digest_verified = content is not None and bool(manifest.get("digest"))
             if digest_verified:
                 status = "TRUSTED"
                 message = f"Skill '{skill_name}' passed all provenance checks."
             else:
                 status = "TRUSTED_DIGEST_UNVERIFIED"
+                reason = (
+                    "no skill content was supplied to compare it with"
+                    if content is None
+                    else "the manifest has no digest to compare the content with"
+                )
                 message = (
                     f"Skill '{skill_name}' passed the provenance checks, but its "
-                    "digest was checked for form only: no skill content was "
-                    "supplied to compare it with."
+                    f"digest was not checked against content: {reason}."
                 )
             return {
                 "verified": True,
