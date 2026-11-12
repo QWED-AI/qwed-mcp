@@ -106,6 +106,12 @@ def test_binomial_values_match_sympy(expression, value):
     assert safe_parse_expr(expression) == value
 
 
+def test_or_binds_looser_than_and():
+    # "A and B or C" is (A and B) or C, so C alone makes it true.
+    result = verify_logic_statement(["not A", "C"], "A and B or C")
+    assert result["verification_mode"] == "PROVEN"
+
+
 def test_keyword_arguments_to_factorial_are_refused():
     with pytest.raises(SafeParserError):
         safe_parse_expr("factorial(100000000, evaluate=True)")
@@ -162,6 +168,12 @@ def test_premises_must_be_a_list_of_strings():
         "Float(1/3, 1000000000)",
         "Float(1/3, precision=1000000000)",
         "Integer(1e308)**10000",
+        "Integer(2.0**1000000000)",
+        "factorial(1e8)",
+        "binomial(-1, 1e8)",
+        # a named constant is a constant: sin(pi) evaluates to 0
+        "factorial(100000000 + sin(pi))",
+        "2**pi",
     ],
 )
 def test_expression_beyond_cost_bound_is_refused_quickly(expression):
@@ -201,7 +213,7 @@ def test_expression_beyond_cost_bound_is_refused_quickly(expression):
         "E**10",
         "binomial(Rational(1, 2), 3)",
         "2**0.5",
-        "2**pi",
+        "pi**2",
         "Float(1/3, 50)",
         "1.5**1000000",
     ],

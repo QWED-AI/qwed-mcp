@@ -74,10 +74,12 @@ class _StatementParser:
         if " implies " in stmt:
             left, right = stmt.split(" implies ", 1)
             return z3.Implies(self.parse(left), self.parse(right))
-        if " and " in stmt:
-            return z3.And([self.parse(part) for part in stmt.split(" and ")])
+        # Split on the loosest connective first: "A and B or C" is
+        # (A and B) or C.
         if " or " in stmt:
             return z3.Or([self.parse(part) for part in stmt.split(" or ")])
+        if " and " in stmt:
+            return z3.And([self.parse(part) for part in stmt.split(" and ")])
         # "not" binds tighter than the connectives above: "not A and B" is
         # (not A) and B.
         if stmt.startswith("not "):

@@ -55,6 +55,11 @@ MAX_FLOAT_DIGITS = 10_000
 
 _COST_ERROR = "Expression exceeds the evaluation cost bound"
 
+# Names that stand for constants in the parser's namespace. They are
+# constants, not symbols: sin(pi) evaluates to 0, so an expression built
+# from them can be an exact (and large) number.
+_CONSTANT_NAMES = frozenset({"pi", "E", "e", "I", "oo"})
+
 # Functions whose result can be far larger than their argument
 # (exp(k * log(n)) evaluates to n**k).
 _GROWING_FUNCTIONS = frozenset({"exp", "sinh", "cosh"})
@@ -82,8 +87,7 @@ class _FloatConst:
 _FLOAT = _FloatConst()
 
 # A value is an exact Fraction, an _Approx, _FLOAT, or None when it depends
-# on a symbol or a named constant such as pi (SymPy keeps those symbolic, so
-# they cost nothing to build).
+# on a symbol (SymPy keeps those symbolic, so they cost nothing to build).
 _Value = Union[Fraction, _Approx, _FloatConst, None]
 
 
@@ -207,9 +211,12 @@ def _call_value(node: ast.Call, args: list, values: dict) -> _Value:
     if name == "Float":
         return _float_value(node, args, values)
     if any(arg is _FLOAT for arg in args):
-        # Integer(1e308) is an exact integer of up to 1024 bits; anything
-        # else of a float is a float.
-        return _Approx(1100) if name in {"Integer", "Rational"} else _FLOAT
+        # A float can carry a huge exponent (2.0**1000000000), so turning it
+        # into an exact number, or a factorial or binomial of it, cannot be
+        # bounded. Anything else of a float is a float.
+        if name in {"Integer", "Rational", "factorial", "binomial"}:
+            raise SafeParserError(_COST_ERROR)
+        return _FLOAT
     if name in _VALUED_CALLS:
         return _VALUED_CALLS[name](args)
     if name == "Symbol" or any(arg is None for arg in args):
@@ -300,7 +307,7 @@ def _node_value(node: ast.AST, values: dict) -> _Value:
             return _FLOAT
         return _bounded(Fraction(value))
     if isinstance(node, ast.Name):
-        return None  # a symbol, or a named constant such as pi
+        return _Approx(2) if node.id in _CONSTANT_NAMES else None
     if isinstance(node, ast.UnaryOp):
         operand = values.get(id(node.operand))
         if isinstance(node.op, ast.USub) and isinstance(operand, Fraction):
