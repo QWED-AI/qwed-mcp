@@ -1,8 +1,5 @@
-"""The boundary gate scans every tracked Python file and fails closed (#65).
-
-The gate lists files with `git ls-files`; these tests pass it a fixed
-listing instead, so they need no git repository.
-"""
+"""The boundary gate scans every Python file in the repository and fails
+closed (#65)."""
 
 import importlib.util
 from pathlib import Path
@@ -65,12 +62,20 @@ def test_listing_failure_fails(tmp_path):
 
 def test_checkout_under_an_excluded_name_is_still_scanned(tmp_path):
     root = _tree(tmp_path / "venv" / "repo", {"src/pkg/bad.py": SHELL})
-    assert _run(root, ["src/pkg/bad.py"]) == 1
+    assert _load_gate().main(repo_root=root) == 1
+
+
+@pytest.mark.parametrize(
+    "path", ["tests/t.py", "scripts/s.py", "examples/e.py", "r.py"]
+)
+def test_default_walk_reaches_files_outside_src(tmp_path, path):
+    root = _tree(tmp_path, {"src/pkg/clean.py": CLEAN, path: SHELL})
+    assert _load_gate().main(repo_root=root) == 1
 
 
 def test_excluded_directory_inside_the_repository_is_skipped(tmp_path):
     root = _tree(tmp_path, {"src/pkg/clean.py": CLEAN, ".venv/lib/x.py": SHELL})
-    assert _run(root, ["src/pkg/clean.py", ".venv/lib/x.py"]) == 0
+    assert _load_gate().main(repo_root=root) == 0
 
 
 def test_this_repository_passes():
