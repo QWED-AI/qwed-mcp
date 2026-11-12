@@ -337,6 +337,20 @@ def _row_independent(node: exp.Expression) -> bool:
     return not any(_correlated(select) for select in node.find_all(exp.Select))
 
 
+# Comparisons whose result is the same for every row when both sides are
+# the same column.
+_COMPARISONS = (
+    exp.EQ,
+    exp.NEQ,
+    exp.GT,
+    exp.GTE,
+    exp.LT,
+    exp.LTE,
+    exp.NullSafeEQ,
+    exp.NullSafeNEQ,
+)
+
+
 def _unparenthesised(node: exp.Expression) -> exp.Expression:
     while isinstance(node, exp.Paren):
         node = node.this
@@ -357,20 +371,27 @@ def _operand_key(node: exp.Expression, dialect: Optional[str]) -> exp.Expression
 
 
 def _self_comparison(node: exp.Expression, dialect: Optional[str] = None) -> bool:
-    """``x = x`` and the like: true for every row where x is not NULL.
+    """``x = x`` and the like: the same for every row where x is not NULL
+    (``x <> x``, ``x < x`` and ``x > x`` are false for every row, so their
+    negation is true for every row).
 
-    The operands are compared as the database reads them, so ``id = (id)``,
-    ``ID = id`` and ``users.id = id`` count too: in a valid query, an
-    unqualified name that one table qualifies on the other side is that
-    same column.
+    The operands are compared as the database reads them, so ``id = (id)``
+    and ``ID = id`` count too. A column qualified on one side only is the
+    same column when its table belongs to the query the comparison is in:
+    there, the unqualified name resolves first. ``id = u.id`` inside a
+    subquery that reads another table compares two columns.
     """
-    if not isinstance(node, (exp.EQ, exp.GTE, exp.LTE, exp.NullSafeEQ)):
+    if not isinstance(node, _COMPARISONS):
         return False
     left = _operand_key(node.this, dialect)
     right = _operand_key(node.expression, dialect)
     if isinstance(left, exp.Column) and isinstance(right, exp.Column):
-        if left.name == right.name and not (left.table and right.table):
-            return True
+        if left.name == right.name and bool(left.table) != bool(right.table):
+            table = (left.table or right.table).lower()
+            scope = node.find_ancestor(exp.Select)
+            # an UPDATE or DELETE condition outside any SELECT reads the
+            # statement's own tables first
+            return scope is None or table in _own_names(scope)
     return left == right
 
 

@@ -197,6 +197,12 @@ SELF_COMPARISON_FORMS = [
     ('SELECT * FROM users WHERE "ID" = id', "snowflake"),
     ("SELECT * FROM users WHERE users.id = id", None),
     ("SELECT * FROM users u WHERE id >= u.id", None),
+    ("UPDATE users SET admin = 1 WHERE users.id = id", None),
+    # a comparison that is false for every row, negated
+    ("SELECT * FROM users WHERE NOT (id <> id)", None),
+    ("SELECT * FROM users WHERE NOT id < id", None),
+    ("SELECT * FROM users WHERE NOT (id > id)", None),
+    ("SELECT * FROM users WHERE NOT (id IS DISTINCT FROM id)", "postgres"),
 ]
 
 
@@ -211,6 +217,12 @@ def test_self_comparison_written_differently_is_refused(query, dialect):
         # "ID" keeps its case in PostgreSQL, so it is another column than id
         ('SELECT * FROM users WHERE "ID" = id', "postgres"),
         ("SELECT * FROM a JOIN b ON a.id = b.id", None),
+        # id reads orders.id first; u.id is the outer users.id
+        (
+            "SELECT * FROM users u WHERE EXISTS "
+            "(SELECT 1 FROM orders o WHERE id = u.id)",
+            "postgres",
+        ),
     ],
 )
 def test_different_columns_are_not_a_self_comparison(query, dialect):
