@@ -220,3 +220,62 @@ def test_brackets_are_subscripts_outside_tsql():
         ]
         is True
     )
+
+
+def test_comparison_inside_a_function_is_checked():
+    query = "UPDATE users SET is_admin = TRUE WHERE COALESCE(id = id, TRUE)"
+    assert verify_sql_query(query)["verified"] is False
+
+
+def test_sibling_subquery_cte_does_not_hide_a_table():
+    query = (
+        "SELECT * FROM (SELECT * FROM secret) AS s, "
+        "(WITH secret AS (SELECT 1) SELECT * FROM secret) AS c"
+    )
+    assert verify_sql_query(query, [])["verified"] is False
+
+
+def test_later_cte_is_not_visible_to_an_earlier_one():
+    query = (
+        "WITH first AS (SELECT * FROM secret), secret AS (SELECT 1) SELECT * FROM first"
+    )
+    assert verify_sql_query(query, ["users"], dialect="postgres")["verified"] is False
+
+
+def test_earlier_cte_is_visible_to_a_later_one():
+    query = "WITH a AS (SELECT id FROM users), b AS (SELECT id FROM a) SELECT * FROM b"
+    assert verify_sql_query(query, ["users"])["verified"] is True
+
+
+def test_quoted_dotted_name_is_not_a_qualified_name():
+    allowed = ["public.users"]
+    query = 'SELECT * FROM "public.users"'
+    assert verify_sql_query(query, allowed, dialect="postgres")["verified"] is False
+    # A table whose own name contains a dot is allowed by a quoted entry.
+    query = 'SELECT * FROM "audit.events"'
+    quoted_entry = verify_sql_query(query, ['"audit.events"'], dialect="postgres")
+    assert quoted_entry["verified"] is True
+    dotted_entry = verify_sql_query(query, ["audit.events"], dialect="postgres")
+    assert dotted_entry["verified"] is False
+
+
+def test_mixed_case_entry_admits_only_the_quoted_name():
+    assert (
+        verify_sql_query('SELECT * FROM "Users"', ["Users"], dialect="postgres")[
+            "verified"
+        ]
+        is True
+    )
+    assert (
+        verify_sql_query("SELECT * FROM users", ["Users"], dialect="postgres")[
+            "verified"
+        ]
+        is False
+    )
+
+
+def test_tsql_update_through_a_cte_checks_its_body():
+    query = "WITH x AS (SELECT id, flag FROM users) UPDATE x SET flag = 1 WHERE id = 7"
+    assert verify_sql_query(query, ["users"], dialect="tsql")["verified"] is True
+    query = "WITH x AS (SELECT id, flag FROM secret) UPDATE x SET flag = 1 WHERE id = 7"
+    assert verify_sql_query(query, ["users"], dialect="tsql")["verified"] is False

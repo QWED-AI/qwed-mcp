@@ -124,7 +124,7 @@ def sql_issues(
     issues.extend(_condition_issues(root))
     issues.extend(_function_issues(root))
     if allowed_tables is not None:
-        issues.extend(_table_issues(root, allowed_tables))
+        issues.extend(_table_issues(root, allowed_tables, dialect))
     return list(dict.fromkeys(issues))
 
 
@@ -250,7 +250,16 @@ def _condition_issues(root: exp.Expression) -> List[str]:
             conditions.append(join.args["on"])
     issues = []
     for condition in conditions:
-        for part in _condition_parts(condition):
+        # The parts joined by AND/OR, and every comparison nested inside
+        # them, such as COALESCE(id = id, TRUE).
+        parts = list(_condition_parts(condition))
+        parts += [
+            node
+            for part in parts
+            for node in part.find_all(exp.Predicate)
+            if node is not part
+        ]
+        for part in parts:
             if _data_free(part):
                 issues.append(
                     f"Suspicious tautology detected: constant condition '{part.sql()}'"
@@ -284,17 +293,20 @@ def _cte_key(cte: exp.CTE) -> str:
     return _identifier_key(alias.this if alias is not None else None)
 
 
-def _visible_ctes(node: exp.Expression):
-    """The CTEs a WITH on ``node`` itself defines."""
-    for value in node.args.values():
-        if isinstance(value, exp.With):
-            yield from value.expressions
+# Dialects where an UPDATE or DELETE may target a CTE (it then writes the
+# CTE's underlying table, which the CTE's own body names).
+_CTE_WRITE_DIALECTS = frozenset({"tsql"})
 
 
-def _is_write_target(table: exp.Table) -> bool:
-    """The table an INSERT, UPDATE or DELETE writes: always a stored table,
-    whatever CTE shares its name."""
+def _is_write_target(table: exp.Table, dialect: Optional[str] = None) -> bool:
+    """The table an INSERT, UPDATE or DELETE writes: a stored table whatever
+    CTE shares its name, except where the dialect lets UPDATE and DELETE
+    target a CTE."""
     parent = table.parent
+    if (dialect or "").lower() in _CTE_WRITE_DIALECTS and isinstance(
+        parent, (exp.Update, exp.Delete)
+    ):
+        return False
     if isinstance(parent, (exp.Insert, exp.Update, exp.Delete)):
         return parent.this is table
     return (
@@ -304,59 +316,81 @@ def _is_write_target(table: exp.Table) -> bool:
     )
 
 
-def _is_cte_reference(table: exp.Table) -> bool:
+def _is_cte_reference(table: exp.Table, dialect: Optional[str] = None) -> bool:
     """Whether ``table`` names a CTE rather than a stored table.
 
     It must be unqualified, read rather than written, and a CTE with its name
     (compared as the database resolves names) must be defined by a WITH on
     one of its enclosing queries, outside that CTE's own body
     (``WITH t AS (SELECT * FROM t)`` reads the stored table ``t``). A CTE in
-    an unrelated subquery does not count.
+    an unrelated subquery does not count, and inside a non-recursive WITH a
+    CTE sees only the CTEs declared before it.
     """
-    if table.args.get("db") or table.args.get("catalog") or _is_write_target(table):
+    if (
+        table.args.get("db")
+        or table.args.get("catalog")
+        or _is_write_target(table, dialect)
+    ):
         return False
     key = _identifier_key(table.this)
-    inside = set()
+    child: exp.Expression = table
     node = table.parent
     while node is not None:
-        if isinstance(node, exp.CTE):
-            inside.add(id(node))
-        for cte in _visible_ctes(node):
-            if _cte_key(cte) == key and id(cte) not in inside:
+        if isinstance(node, exp.With):
+            # Inside one CTE of this WITH: only the CTEs declared before it,
+            # and itself when the WITH is recursive.
+            ctes = list(node.expressions)
+            position = next(
+                (i for i, cte in enumerate(ctes) if cte is child), len(ctes)
+            )
+            if node.args.get("recursive"):
+                position += 1
+            if any(_cte_key(cte) == key for cte in ctes[:position]):
                 return True
-        node = node.parent
+        else:
+            # From the main query every CTE of its WITH is visible.
+            for value in node.args.values():
+                if isinstance(value, exp.With) and value is not child:
+                    if any(_cte_key(cte) == key for cte in value.expressions):
+                        return True
+        child, node = node, node.parent
     return False
 
 
 def _table_allowed(table: exp.Table, allowed: set) -> bool:
     """Whether ``table`` is in ``allowed``, by its table part or its full
-    qualified name. Each part is compared as the database resolves it: an
-    unquoted identifier case-insensitively, a quoted one exactly, so
-    ["users"] does not admit "Users" but ["Users"] does."""
+    qualified name.
+
+    Allowlist entries are names as the database resolves them: an unquoted
+    reference folds to lower case and a quoted one keeps its case, and the
+    result must equal the entry. So ["users"] admits users, Users and
+    "users"; ["Users"] admits only "Users". A dot in an entry separates
+    qualified parts (schema.table). To allow a table whose own name contains
+    a dot, write the entry with double quotes: '"audit.events"'.
+    """
     parts = [part for part in table.parts if isinstance(part, exp.Identifier)]
+    keys = [_identifier_key(part) for part in parts]
     for entry in allowed:
+        if len(entry) > 2 and entry.startswith('"') and entry.endswith('"'):
+            if parts[-1].quoted and parts[-1].name == entry[1:-1]:
+                return True
+            continue
         wanted = entry.split(".")
-        if len(wanted) > len(parts):
-            continue
-        tail = parts[len(parts) - len(wanted) :]
-        if len(wanted) not in (1, len(parts)):
-            continue
-        if all(
-            part.name == want if part.quoted else part.name.lower() == want.lower()
-            for part, want in zip(tail, wanted)
-        ):
+        if len(wanted) in (1, len(keys)) and keys[len(keys) - len(wanted) :] == wanted:
             return True
     return False
 
 
-def _table_issues(root: exp.Expression, allowed_tables: List[str]) -> List[str]:
+def _table_issues(
+    root: exp.Expression, allowed_tables: List[str], dialect: Optional[str] = None
+) -> List[str]:
     allowed = {name.strip() for name in allowed_tables if name and name.strip()}
     unauthorized = []
     for table in root.find_all(exp.Table):
         name = table.name
         if not name:
             return ["Could not determine an accessed table: no assurance produced"]
-        if _is_cte_reference(table):
+        if _is_cte_reference(table, dialect):
             continue
         if not _table_allowed(table, allowed):
             qualified = ".".join(
@@ -380,6 +414,6 @@ def extract_tables(query: str, dialect: Optional[str] = None) -> List[str]:
         if statement is None:
             continue
         for table in statement.find_all(exp.Table):
-            if table.name and not _is_cte_reference(table):
+            if table.name and not _is_cte_reference(table, dialect):
                 names.add(table.name)
     return sorted(names)
