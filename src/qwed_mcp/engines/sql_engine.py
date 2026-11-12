@@ -265,20 +265,34 @@ def _function_issues(root: exp.Expression) -> List[str]:
     ]
 
 
+def _identifier_key(identifier) -> str:
+    """How a database resolves a name: unquoted identifiers fold to lower
+    case, quoted ones keep their case ("USERS" and users differ)."""
+    if isinstance(identifier, exp.Identifier):
+        return identifier.name if identifier.quoted else identifier.name.lower()
+    return str(identifier or "").lower()
+
+
+def _cte_key(cte: exp.CTE) -> str:
+    alias = cte.args.get("alias")
+    return _identifier_key(alias.this if alias is not None else None)
+
+
 def _cte_names(root: exp.Expression) -> set:
-    return {cte.alias.lower() for cte in root.find_all(exp.CTE) if cte.alias}
+    return {_cte_key(cte) for cte in root.find_all(exp.CTE) if cte.alias}
 
 
 def _is_cte_reference(table: exp.Table, cte_names: set) -> bool:
     """Whether ``table`` names a CTE rather than a stored table: it is
-    unqualified, a CTE has its name, and it is not inside the body of that
-    CTE (``WITH t AS (SELECT * FROM t)`` reads the stored table ``t``)."""
-    name = table.name.lower()
-    if table.args.get("db") or table.args.get("catalog") or name not in cte_names:
+    unqualified, a CTE has its name (compared as the database resolves
+    names), and it is not inside the body of that CTE
+    (``WITH t AS (SELECT * FROM t)`` reads the stored table ``t``)."""
+    key = _identifier_key(table.this)
+    if table.args.get("db") or table.args.get("catalog") or key not in cte_names:
         return False
     node = table.parent
     while node is not None:
-        if isinstance(node, exp.CTE) and (node.alias or "").lower() == name:
+        if isinstance(node, exp.CTE) and _cte_key(node) == key:
             return False
         node = node.parent
     return True

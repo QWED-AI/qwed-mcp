@@ -166,3 +166,16 @@ def test_quoted_table_name_keeps_its_case():
     query = 'SELECT * FROM "users"'
     assert verify_sql_query(query, allowed, dialect="postgres")["verified"] is True
     assert verify_sql_query("SELECT * FROM Users", allowed)["verified"] is True
+
+
+def test_quoted_name_is_not_resolved_to_an_unquoted_cte():
+    # In PostgreSQL "USERS" is a stored table, not the CTE users.
+    query = 'WITH users AS (SELECT 1 AS id) SELECT * FROM "USERS"'
+    assert verify_sql_query(query, ["users"], dialect="postgres")["verified"] is False
+    assert extract_tables(query, dialect="postgres") == ["USERS"]
+
+
+def test_unquoted_name_resolves_to_the_cte_in_any_case():
+    query = "WITH users AS (SELECT id FROM accounts) SELECT * FROM USERS"
+    assert verify_sql_query(query, ["accounts"])["verified"] is True
+    assert extract_tables(query) == ["accounts"]
