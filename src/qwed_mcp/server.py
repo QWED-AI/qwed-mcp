@@ -83,8 +83,11 @@ def verify_server_skills():
             sys.exit(1)
 
         logger.info(
-            f"Skill '{result.get('skill_name', 'unknown')}' verified successfully."
+            f"Skill '{result.get('skill_name', 'unknown')}' passed provenance "
+            f"checks (status: {result.get('status')})."
         )
+        for advisory in result.get("advisories", []):
+            logger.info(f"Skill provenance advisory: {advisory}")
     except Exception as e:
         logger.error(f"FATAL: Failed to read or parse skill manifest: {e}")
         sys.exit(1)
