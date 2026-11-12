@@ -7,11 +7,13 @@ replacement for proper security review.
 """
 
 import ast
+import os
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCAN_ROOT = REPO_ROOT / "src"
+# Directories never scanned, matched against repo-root-relative path parts
+# only, so the checkout location cannot remove files from the scan (#65).
 EXCLUDED_DIRS = {".git", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache"}
 
 # Approved wrapper paths (relative to repo root)
@@ -77,99 +79,138 @@ def _build_alias_map(tree: ast.Module) -> dict[str, str]:
     return alias_map
 
 
-def check_file(filepath: Path) -> list[str]:
+def _shell_true_errors(node: ast.Call, relpath: str) -> list[str]:
+    if any(
+        keyword.arg == "shell"
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value is True
+        for keyword in node.keywords
+    ):
+        return [f"  [SHELL_TRUE] {relpath}:{node.lineno}: Disallowed shell=True argument"]
+    return []
+
+
+def _resolve(name: str, alias_map: dict[str, str]) -> str:
+    """The dotted name a call resolves to through import aliases."""
+    resolved = alias_map.get(name, name)
+    # Resolve module aliases in dotted names: import subprocess as sp; sp.run()
+    if resolved == name and "." in name:
+        module, rest = name.split(".", 1)
+        if module in alias_map:
+            resolved = f"{alias_map[module]}.{rest}"
+    return resolved
+
+
+def _call_name_errors(name: str, resolved: str, relpath: str, line: int) -> list[str]:
+    leaf = resolved.split(".")[-1]
     errors = []
-    try:
-        tree = ast.parse(filepath.read_text(encoding="utf-8"))
-    except SyntaxError as exc:
+    # bare eval/exec, or through builtins: always dangerous
+    if leaf in {"eval", "exec"} and (
+        "." not in resolved or resolved.startswith(("builtins.", "__builtins__."))
+    ):
         errors.append(
-            f"  [PARSE_ERROR] {filepath.relative_to(REPO_ROOT)}:{exc.lineno}: "
-            "File could not be parsed; boundary check must fail closed"
+            f"  [BARE_EVAL] {relpath}:{line}: "
+            f"Disallowed call '{name}()' \u2014 use approved wrappers"
         )
-        return errors
-
-    relpath = filepath.relative_to(REPO_ROOT).as_posix()
-    in_wrapper = relpath in APPROVED_WRAPPER_PATHS
-    alias_map = _build_alias_map(tree)
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-
-        # Check for shell=True on every call node, even unresolvable ones
-        if not in_wrapper and any(
-            keyword.arg == "shell"
-            and isinstance(keyword.value, ast.Constant)
-            and keyword.value.value is True
-            for keyword in node.keywords
-        ):
-            errors.append(
-                f"  [SHELL_TRUE] {relpath}:{node.lineno}: "
-                "Disallowed shell=True argument"
-            )
-
-        call_names = get_call_names(node)
-        if not call_names:
-            continue
-
-        for name in call_names:
-            resolved = alias_map.get(name, name)
-
-            # Resolve module aliases in dotted names
-            # e.g. import subprocess as sp; sp.run(...)
-            if resolved == name and "." in name:
-                parts = name.split(".", 1)
-                resolved_module = alias_map.get(parts[0])
-                if resolved_module is not None:
-                    resolved = f"{resolved_module}.{parts[1]}"
-
-            leaf = resolved.split(".")[-1]
-
-            # bare eval/exec → always dangerous
-            if leaf in {"eval", "exec"} and not in_wrapper:
-                if "." not in resolved or resolved.startswith("builtins.") or resolved.startswith("__builtins__."):
-                    errors.append(
-                        f"  [BARE_EVAL] {relpath}:{node.lineno}: "
-                        f"Disallowed call '{name}()' \u2014 use approved wrappers"
-                    )
-
-            # parse_expr: flag both bare and qualified (sympy.parse_expr etc.)
-            if leaf == "parse_expr" and not in_wrapper:
-                errors.append(
-                    f"  [BARE_PARSE_EXPR] {relpath}:{node.lineno}: "
-                    f"Disallowed call '{name}()' \u2014 use approved wrappers"
-                )
-
-            # os.system, subprocess.*, popen (dotted or alias-resolved names)
-            if resolved in FORBIDDEN_CALLS and not in_wrapper:
-                errors.append(
-                    f"  [BARE_SHELL] {relpath}:{node.lineno}: "
-                    f"Disallowed call '{name}()' \u2014 use safe_shell() or approved wrapper"
-                )
-
+    # parse_expr: flag both bare and qualified (sympy.parse_expr etc.)
+    if leaf == "parse_expr":
+        errors.append(
+            f"  [BARE_PARSE_EXPR] {relpath}:{line}: "
+            f"Disallowed call '{name}()' \u2014 use approved wrappers"
+        )
+    # os.system, subprocess.*, popen (dotted or alias-resolved names)
+    if resolved in FORBIDDEN_CALLS:
+        errors.append(
+            f"  [BARE_SHELL] {relpath}:{line}: "
+            f"Disallowed call '{name}()' \u2014 use safe_shell() or approved wrapper"
+        )
     return errors
 
 
-def main() -> int:
-    errors: list[str] = []
+def check_file(filepath: Path, repo_root: Path = REPO_ROOT) -> list[str]:
+    relpath = filepath.relative_to(repo_root).as_posix()
+    try:
+        tree = ast.parse(filepath.read_text(encoding="utf-8"))
+    except SyntaxError as exc:
+        return [
+            f"  [PARSE_ERROR] {relpath}:{exc.lineno}: "
+            "File could not be parsed; boundary check must fail closed"
+        ]
+    if relpath in APPROVED_WRAPPER_PATHS:
+        return []
 
-    if not SCAN_ROOT.exists() or not SCAN_ROOT.is_dir():
-        print(" QWED Boundary check FAILED")
-        print(f"  [CONFIG_ERROR] Scan root not found or not a directory: {SCAN_ROOT}")
+    alias_map = _build_alias_map(tree)
+    errors = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        # shell=True is checked on every call node, even unresolvable ones
+        errors.extend(_shell_true_errors(node, relpath))
+        for name in get_call_names(node):
+            errors.extend(
+                _call_name_errors(name, _resolve(name, alias_map), relpath, node.lineno)
+            )
+    return errors
+
+
+def python_files(repo_root: Path) -> list[str]:
+    """Repo-relative paths of every Python file under the repository root,
+    skipping EXCLUDED_DIRS. The names are matched against path parts below
+    the root only, so the checkout location cannot remove files (#65)."""
+    def fail(error: OSError) -> None:
+        # os.walk skips a directory it cannot read unless told otherwise; a
+        # skipped directory would let the gate pass without scanning it.
+        raise error
+
+    found = []
+    for directory, subdirs, filenames in os.walk(repo_root, onerror=fail):
+        subdirs[:] = sorted(d for d in subdirs if d not in EXCLUDED_DIRS)
+        relative_dir = Path(directory).relative_to(repo_root)
+        found.extend(
+            (relative_dir / filename).as_posix()
+            for filename in filenames
+            if filename.endswith(".py")
+        )
+    return found
+
+
+def select_files(repo_root: Path, entries: list[str]) -> list[Path]:
+    """The listed files to scan: every one whose repo-relative path has no
+    excluded directory in it (#65)."""
+    return sorted(
+        repo_root / entry
+        for entry in entries
+        if not any(part in EXCLUDED_DIRS for part in Path(entry).parts)
+    )
+
+
+_FAILED = " QWED Boundary check FAILED"
+
+
+def main(repo_root: Path = REPO_ROOT, list_files=python_files) -> int:
+    try:
+        pyfiles = select_files(repo_root, list_files(repo_root))
+    except (OSError, RuntimeError) as exc:
+        print(_FAILED)
+        print(f"  [CONFIG_ERROR] Could not list files: {exc}")
         return 1
 
-    for pyfile in sorted(SCAN_ROOT.rglob("*.py")):
-        if any(part in EXCLUDED_DIRS for part in pyfile.parts):
-            continue
-        errors.extend(check_file(pyfile))
+    if not pyfiles:
+        print(_FAILED)
+        print("  [CONFIG_ERROR] No Python files found to scan")
+        return 1
+
+    errors: list[str] = []
+    for pyfile in pyfiles:
+        errors.extend(check_file(pyfile, repo_root))
 
     if errors:
-        print(" QWED Boundary check FAILED")
+        print(_FAILED)
         for err in errors:
             print(err)
         return 1
 
-    print(" QWED Boundary check passed")
+    print(f" QWED Boundary check passed ({len(pyfiles)} files scanned)")
     return 0
 
 

@@ -31,25 +31,24 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Log in to Docker Hub
         # Skipped when secrets are unavailable (dependabot/fork PRs);
         # build + SBOM below still verify the image deterministically.
         if: env.DOCKERHUB_AUTH_AVAILABLE == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels)
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.IMAGE_NAME }}
 
       - name: Build Docker Image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
         with:
           context: .
           push: false
@@ -58,14 +57,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0.18.0
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
         with:
           image: ${{ env.IMAGE_NAME }}:test
           artifact-name: sbom.spdx.json
           output-file: ./sbom.spdx.json
 
       - name: Docker Scout Quickview
-        uses: docker/scout-action@v1
+        uses: docker/scout-action@4bbf17a9da65a7b5497361bb407e88cc9548f69c # v1.28.0
         if: ${{ github.event_name == 'pull_request' && env.DOCKERHUB_AUTH_AVAILABLE == 'true' }}
         with:
           command: quickview
@@ -74,9 +73,11 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Docker Scout CVEs
-        # Soft-fail: surface critical/high CVEs in the PR without blocking the pipeline
-        if: ${{ github.event_name == 'pull_request' && env.DOCKERHUB_AUTH_AVAILABLE == 'true' }}
-        uses: docker/scout-action@v1
+        # Runs on every event. continue-on-error lets the SARIF upload below
+        # still run; "Enforce image scan results" then fails the job (#14).
+        id: scout_cves
+        if: ${{ env.DOCKERHUB_AUTH_AVAILABLE == 'true' }}
+        uses: docker/scout-action@4bbf17a9da65a7b5497361bb407e88cc9548f69c # v1.28.0
         with:
           command: cves
           image: ${{ env.IMAGE_NAME }}:test
@@ -87,6 +88,7 @@ jobs:
         continue-on-error: true
 
       - name: Snyk Container Monitor
+        id: snyk
         # Pinned to SHA (master @ 8e119fb) — supply-chain boundary: actions
         # pinned to branches are mutable references.
         uses: snyk/actions/docker@8e119fbb6c251787721d34ba683ed48eba792766
@@ -99,15 +101,29 @@ jobs:
         continue-on-error: true
 
       - name: Upload Snyk results to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
-        if: env.SNYK_AUTH_AVAILABLE == 'true'
+        uses: github/codeql-action/upload-sarif@9418214df1f2c4b8128c770156c409013b07d6b9 # v3.39.3
+        if: ${{ always() && env.SNYK_AUTH_AVAILABLE == 'true' && hashFiles('snyk.sarif') != '' }}
         with:
           sarif_file: snyk.sarif
+
+      - name: Enforce image scan results
+        # A scan that found critical/high vulnerabilities (or did not finish)
+        # fails the job, so the push below never runs after it (#14).
+        if: ${{ always() }}
+        env:
+          SCOUT_OUTCOME: ${{ steps.scout_cves.outcome }}
+          SNYK_OUTCOME: ${{ steps.snyk.outcome }}
+        run: |
+          echo "Docker Scout: ${SCOUT_OUTCOME:-skipped}, Snyk: ${SNYK_OUTCOME:-skipped}"
+          if [ "$SCOUT_OUTCOME" = "failure" ] || [ "$SNYK_OUTCOME" = "failure" ]; then
+            echo "::error::Image scan reported critical or high vulnerabilities"
+            exit 1
+          fi
 
       - name: Push to Docker Hub
         # Only push if Docker Hub login succeeded and it's not a PR
         if: github.event_name != 'pull_request' && env.DOCKERHUB_AUTH_AVAILABLE == 'true'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
         with:
           context: .
           push: true
