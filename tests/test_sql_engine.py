@@ -341,3 +341,25 @@ def test_derived_table_alias_is_local_to_the_subquery():
 def test_table_less_subquery_reads_the_outer_row():
     query = "SELECT * FROM users WHERE EXISTS (SELECT 1 WHERE id = 7)"
     assert verify_sql_query(query, dialect="postgres")["verified"] is True
+
+
+def test_output_alias_in_a_table_less_subquery_is_its_own():
+    query = (
+        "UPDATE users SET is_admin = TRUE WHERE id = :id OR "
+        "EXISTS (SELECT 1 AS x ORDER BY x)"
+    )
+    assert verify_sql_query(query)["verified"] is False
+
+
+def test_nested_alias_does_not_hide_an_outer_reference():
+    query = (
+        "SELECT * FROM users u WHERE EXISTS (SELECT (SELECT 1 FROM "
+        "(SELECT 1 AS x) AS u) FROM orders o WHERE o.user_id = u.id)"
+    )
+    assert verify_sql_query(query)["verified"] is True
+
+
+def test_long_or_chain_is_a_verdict_not_a_recursion_error():
+    query = "SELECT * FROM t WHERE " + " OR ".join(f"a = {i}" for i in range(3000))
+    result = verify_sql_query(query)
+    assert result["verified"] in (True, False)
