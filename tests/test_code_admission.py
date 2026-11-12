@@ -204,6 +204,12 @@ def test_unsupported_language_is_not_verified():
         "# -*- coding: utf-7 -*-\nprint('x')",
         "#!/usr/bin/env python\n# vim: set fileencoding=latin-1 :\nprint('x')",
         "# coding=no-such-codec\nprint('x')",
+        # Line breaks that str.splitlines() and the tokenizer disagree on.
+        "x = 1 \x0c y\n# coding: utf-7\nprint('x')",
+        "x = 1\x1c\n# coding: utf-7\nprint('x')",
+        "# a\rb\n# coding: utf-7\nprint('x')",
+        "\x0c# coding: latin-1\nprint('x')",
+        "#\x1ccoding: utf-7\nprint('x')",
     ],
 )
 def test_source_encoding_other_than_utf8_is_refused(code):
