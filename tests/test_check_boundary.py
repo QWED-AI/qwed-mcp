@@ -81,3 +81,20 @@ def test_excluded_directory_inside_the_repository_is_skipped(tmp_path):
 def test_this_repository_passes():
     gate = _load_gate()
     assert gate.main() == 0
+
+
+def test_unreadable_directory_fails_the_default_walk(tmp_path, monkeypatch):
+    root = _tree(tmp_path, {"src/pkg/clean.py": CLEAN, "tests/t.py": CLEAN})
+    gate = _load_gate()
+    real_walk = gate.os.walk
+
+    def walk_with_unreadable_tests(top, onerror=None, **kwargs):
+        for directory, subdirs, files in real_walk(top, onerror=onerror, **kwargs):
+            if Path(directory).name == "tests":
+                if onerror is not None:
+                    onerror(PermissionError(13, "Permission denied", directory))
+                continue
+            yield directory, subdirs, files
+
+    monkeypatch.setattr(gate.os, "walk", walk_with_unreadable_tests)
+    assert gate.main(repo_root=root) == 1

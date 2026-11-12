@@ -157,8 +157,13 @@ def python_files(repo_root: Path) -> list[str]:
     """Repo-relative paths of every Python file under the repository root,
     skipping EXCLUDED_DIRS. The names are matched against path parts below
     the root only, so the checkout location cannot remove files (#65)."""
+    def fail(error: OSError) -> None:
+        # os.walk skips a directory it cannot read unless told otherwise; a
+        # skipped directory would let the gate pass without scanning it.
+        raise error
+
     found = []
-    for directory, subdirs, filenames in os.walk(repo_root):
+    for directory, subdirs, filenames in os.walk(repo_root, onerror=fail):
         subdirs[:] = sorted(d for d in subdirs if d not in EXCLUDED_DIRS)
         relative_dir = Path(directory).relative_to(repo_root)
         found.extend(
