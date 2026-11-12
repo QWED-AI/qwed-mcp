@@ -133,19 +133,28 @@ class RiskBasedExecutionGateway:
                 "verification_id": verification_id,
                 "normalized_arguments": normalized_arguments,
                 "message": (
-                    "Python execution was verified, but server policy keeps code "
-                    "execution disabled until QWED_MCP_TRUSTED_CODE_EXECUTION=true."
+                    "Python code passed the allowlist admission check, but server "
+                    "policy keeps code execution disabled until "
+                    "QWED_MCP_TRUSTED_CODE_EXECUTION=true."
                 ),
                 "error_code": "QWED-MCP-RISK-006",
             }
 
+        # Admission is a static check of what the code may reach (an
+        # allowlist of modules, builtins and attributes). It is not a proof
+        # that the code is correct or bounded, so it is not labelled
+        # verified (#43).
         return {
             "verified": True,
-            "status": "ALLOW_VERIFIED",
+            "status": "ALLOW_ADMITTED",
             "risk_level": policy["risk_level"],
             "verification_id": verification_id,
             "normalized_arguments": normalized_arguments,
-            "message": "Python execution request passed deterministic verification.",
+            "message": (
+                "Python execution request passed the allowlist admission check: "
+                "every module, builtin and attribute it uses is admitted. This "
+                "is a static check, not a proof that the code is correct."
+            ),
         }
 
     def _evaluate_status_lookup(
