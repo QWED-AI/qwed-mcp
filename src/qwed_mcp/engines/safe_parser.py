@@ -12,6 +12,7 @@ Security fix for GHSA-mw6r-2hvm-4rp2 (CWE-94).
 import ast
 import re
 import unicodedata
+from fractions import Fraction
 from typing import Any, Dict, Optional, Tuple
 
 import sympy
@@ -28,6 +29,120 @@ from sympy.parsing.sympy_parser import (
 __all__ = ["safe_parse_expr", "SafeParserError"]
 
 MAX_EXPRESSION_LENGTH = 5_000
+
+
+# CWE-400 (#25): parse_expr evaluates integer arithmetic eagerly, so
+# ``10**10**10`` or ``factorial(10**9)`` would build a huge integer before any
+# check could run. Constant subexpressions are bounded before parse_expr.
+MAX_INTEGER_BITS = 1_000_000
+MAX_FACTORIAL_ARGUMENT = 10_000
+
+_COST_ERROR = "Expression exceeds the evaluation cost bound"
+
+
+def _bits(value: Fraction) -> int:
+    return max(abs(value.numerator).bit_length(), value.denominator.bit_length())
+
+
+def _bounded(value: Fraction) -> Fraction:
+    if _bits(value) > MAX_INTEGER_BITS:
+        raise SafeParserError(_COST_ERROR)
+    return value
+
+
+def _constant_value(node: ast.AST) -> Optional[Fraction]:
+    """The exact value of a constant integer subexpression, or None.
+
+    Every child is visited, so a constant subexpression under a symbolic one
+    (``x**(10**10**6)``) is bounded too. Raises SafeParserError before any
+    operation whose result would exceed MAX_INTEGER_BITS.
+    """
+    if isinstance(node, ast.Constant):
+        value = node.value
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return _bounded(Fraction(value))
+    if isinstance(node, ast.UnaryOp):
+        operand = _constant_value(node.operand)
+        if operand is None:
+            return None
+        return -operand if isinstance(node.op, ast.USub) else operand
+    if isinstance(node, ast.BinOp):
+        left = _constant_value(node.left)
+        right = _constant_value(node.right)
+        if left is None or right is None:
+            return None
+        return _binop_value(node.op, left, right)
+    if isinstance(node, ast.Call):
+        args = [_constant_value(arg) for arg in node.args]
+        for keyword in node.keywords:
+            _constant_value(keyword.value)
+        name = node.func.id if isinstance(node.func, ast.Name) else ""
+        if name in {"factorial", "binomial"} and args and args[0] is not None:
+            if args[0] > MAX_FACTORIAL_ARGUMENT:
+                raise SafeParserError(_COST_ERROR)
+        return None
+    for child in ast.iter_child_nodes(node):
+        _constant_value(child)
+    return None
+
+
+def _binop_value(op: ast.operator, left: Fraction, right: Fraction) -> Optional[Fraction]:
+    if isinstance(op, (ast.Add, ast.Sub)):
+        return _bounded(left + right if isinstance(op, ast.Add) else left - right)
+    if isinstance(op, ast.Mult):
+        if _bits(left) + _bits(right) > MAX_INTEGER_BITS:
+            raise SafeParserError(_COST_ERROR)
+        return left * right
+    if isinstance(op, ast.Pow):
+        if right.denominator != 1:
+            return None  # a root: SymPy keeps it symbolic
+        if abs(left) in (0, 1):
+            return left ** int(right) if right >= 0 or left != 0 else None
+        if abs(right) > MAX_INTEGER_BITS or _bits(left) * abs(right) > MAX_INTEGER_BITS:
+            raise SafeParserError(_COST_ERROR)
+        return left ** int(right)
+    if right == 0:
+        return None
+    if isinstance(op, ast.Div):
+        return _bounded(left / right)
+    if isinstance(op, ast.FloorDiv):
+        return _bounded(Fraction(left // right))
+    if isinstance(op, ast.Mod):
+        return _bounded(left % right)
+    return None
+
+
+# Input that is not valid Python (implicit multiplication, ``n!``) is not
+# AST-checked, so its powers and factorials are held to literal operands.
+_FALLBACK_POWER = re.compile(r"(\*\*|\^)\s*([-+]?)\s*(\d*\.?\d*)")
+_FALLBACK_FACTORIAL = re.compile(r"(\d+|[A-Za-z_]\w*|\))\s*!")
+_FALLBACK_FACTORIAL_CALL = re.compile(r"\b(factorial|binomial)\s*\(\s*(\d*)\s*[,)]?")
+
+
+def _check_fallback_cost(expression: str) -> None:
+    powers = list(_FALLBACK_POWER.finditer(expression))
+    for match in powers:
+        literal = match.group(3)
+        if not literal:
+            # The exponent is a name or a bracketed expression.
+            after = expression[match.end():].lstrip()
+            if after[:1] == "(" or not after[:1].isalpha():
+                raise SafeParserError(_COST_ERROR)
+            continue
+        if "." not in literal and int(literal) > MAX_FACTORIAL_ARGUMENT:
+            raise SafeParserError(_COST_ERROR)
+        rest = expression[match.end():].lstrip()
+        if rest.startswith("**") or rest.startswith("^"):
+            raise SafeParserError(_COST_ERROR)  # a power tower
+    for match in _FALLBACK_FACTORIAL.finditer(expression):
+        operand = match.group(1)
+        if operand == ")" or (operand.isdigit() and int(operand) > MAX_FACTORIAL_ARGUMENT):
+            raise SafeParserError(_COST_ERROR)
+    for match in _FALLBACK_FACTORIAL_CALL.finditer(expression):
+        literal = match.group(2)
+        if not literal or int(literal) > MAX_FACTORIAL_ARGUMENT:
+            raise SafeParserError(_COST_ERROR)
 
 _DENYLIST_PATTERN = re.compile(
     r"(?:"
@@ -93,6 +208,7 @@ def _validate_ast_nodes(expression: str) -> None:
                 raise SafeParserError(
                     "Expression contains disallowed construct: attribute access"
                 )
+        _check_fallback_cost(expression)
         return
     for node in ast.walk(tree):
         if not isinstance(node, _ALLOWED_AST_NODES):
@@ -105,6 +221,7 @@ def _validate_ast_nodes(expression: str) -> None:
             raise SafeParserError(
                 "Expression contains disallowed string literal"
             )
+    _constant_value(tree.body)
 
 
 def _build_safe_local_dict(

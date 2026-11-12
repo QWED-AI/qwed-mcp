@@ -5,11 +5,14 @@ Uses SymPy for symbolic mathematics verification.
 """
 
 import logging
-from typing import Optional
 
 from qwed_mcp.engines.safe_parser import safe_parse_expr, SafeParserError
 
 logger = logging.getLogger("qwed-mcp.engines.math")
+
+# "evaluate" checks that the expression and the claimed result are equal
+# after simplification. Any other operation name is refused (#15).
+SUPPORTED_OPERATIONS = ("derivative", "integral", "simplify", "solve", "evaluate")
 
 
 def verify_math_expression(
@@ -28,10 +31,19 @@ def verify_math_expression(
     Returns:
         Verification result with verified status and details
     """
+    if operation not in SUPPORTED_OPERATIONS:
+        return {
+            "verified": False,
+            "message": (
+                f"Unsupported operation: {operation}. "
+                f"Supported: {', '.join(SUPPORTED_OPERATIONS)}"
+            ),
+            "issues": [f"Operation '{operation}' is not supported"],
+            "operation": operation,
+        }
+
     try:
-        from sympy import (
-            symbols, diff, integrate, simplify, solve, Eq,
-        )
+        from sympy import symbols, diff, integrate, simplify, solve
 
         x, y, z = symbols("x y z")
 
@@ -64,8 +76,8 @@ def verify_math_expression(
             actual = simplify(expr)
         elif operation == "solve":
             actual = solve(expr, x)
-        else:  # evaluate
-            actual = simplify(expr)
+        else:
+            actual = simplify(expr)  # "evaluate": checked against SUPPORTED_OPERATIONS
 
         # Compare results
         if operation == "solve":
