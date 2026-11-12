@@ -206,15 +206,21 @@ _VALUED_CALLS = {
 
 # The decimal exponent of a float literal. SymPy turns '1e-1000000000' into
 # an exact rational with a denominator of 10**1000000000 while parsing.
-_FLOAT_EXPONENT = re.compile(r"[eE]([+-]?\d+)")
+# Digits may be grouped with underscores (PEP 515): 1e1_000_000_000.
+_FLOAT_EXPONENT = re.compile(r"[eE]([+-]?[\d_]+)")
 
 
 def _check_float_literal(node: ast.Call) -> None:
     first = node.args[0] if node.args else None
     if isinstance(first, ast.Constant) and isinstance(first.value, str):
         match = _FLOAT_EXPONENT.search(first.value)
-        if match and abs(int(match.group(1))) > MAX_FLOAT_DIGITS:
-            raise SafeParserError(_COST_ERROR)
+        if match:
+            try:
+                exponent = int(match.group(1).replace("_", ""))
+            except ValueError:
+                raise SafeParserError(_COST_ERROR) from None
+            if abs(exponent) > MAX_FLOAT_DIGITS:
+                raise SafeParserError(_COST_ERROR)
         if len(first.value) > MAX_FLOAT_DIGITS:
             raise SafeParserError(_COST_ERROR)
 
@@ -404,9 +410,15 @@ def _collapse_bits(node: ast.AST, values: dict, bounds: dict) -> int:
         return min(left + right, _BOUND_CAP)
     if isinstance(node, ast.Call):
         name = node.func.id if isinstance(node.func, ast.Name) else ""
+        largest = max(children, default=0)
+        if name == "factorial":
+            # n! has fewer than n*log2(n) bits, and n < 2**largest.
+            return min(2 ** min(largest, 64) * max(largest, 1), _BOUND_CAP)
+        if name == "binomial":
+            # binomial(n, k) <= 2**n, and n < 2**largest.
+            return min(2 ** min(largest, 64), _BOUND_CAP)
         if name in _GROWING_FUNCTIONS:
             # exp(k*log(n) + x - x) is n**k once x - x cancels.
-            largest = max(children, default=0)
             return min(int(1.45 * 2 ** min(largest, 64)) + 1, _BOUND_CAP)
         return min(sum(children) + 2, _BOUND_CAP)
     return max(children, default=0)

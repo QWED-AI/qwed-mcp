@@ -206,6 +206,12 @@ def test_premises_must_be_a_list_of_strings():
         "2**((x - x + 1)/(1/10**9))",
         "2**((x - x + 1)/Rational(1, 10**9))",
         "factorial((x - x + 1)/(1/10**8))",
+        # underscores in a float literal's exponent (PEP 515)
+        "1e1_000_000_000",
+        "1E-1_000_000_000",
+        # a factorial or binomial grows far beyond its argument
+        "factorial(x - x + 1000)**50000",
+        "binomial(x - x + 4000, 2000)**1000",
     ],
 )
 def test_expression_beyond_cost_bound_is_refused_quickly(expression):
@@ -225,6 +231,8 @@ def test_expression_beyond_cost_bound_is_refused_quickly(expression):
         "factorial(10)",
         "x**(1/2)",
         "2**((x + 1)/(1/2))",
+        "factorial(n + 1)**2",
+        "binomial(n + 2, 2)**3",
         "(x+1)**3",
         "2x**3",
         "5!",
