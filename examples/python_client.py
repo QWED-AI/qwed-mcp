@@ -1,136 +1,114 @@
 """
 QWED-MCP Python Client Example
 
-This script demonstrates how to use QWED-MCP programmatically via the MCP protocol.
+Connects to QWED-MCP over stdio and calls its two tools:
+
+- execute_python_code: runs Python code after the allowlist admission check;
+- verification_status: reads the result of a job started with background=True.
+
+Code execution is off unless the server's environment sets
+QWED_MCP_TRUSTED_CODE_EXECUTION=true. This example sets it for the server it
+starts. Admitted code runs with the server's privileges, so only enable it
+where that is acceptable.
 """
 
 import asyncio
+
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+# The claim is wrong on purpose: 14356.29 is what annual compounding gives.
+# Quarterly compounding gives 14499.48, so the check prints False.
+COMPOUND_INTEREST = """
+from decimal import Decimal, ROUND_HALF_UP
+
+principal = Decimal("10000")
+rate = Decimal("0.075")
+n, years = 4, 5
+amount = principal * (1 + rate / n) ** (n * years)
+amount = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+print("amount:", amount)
+print("claim of 14356.29 holds:", amount == Decimal("14356.29"))
+"""
+
+SYLLOGISM = """
+from itertools import product
+
+# Premises: mammal -> warm_blooded, dolphin -> mammal.
+# Conclusion: dolphin -> warm_blooded. Check every assignment.
+def implies(a, b):
+    return (not a) or b
+
+counterexamples = [
+    (dolphin, mammal, warm)
+    for dolphin, mammal, warm in product([False, True], repeat=3)
+    if implies(mammal, warm) and implies(dolphin, mammal)
+    and not implies(dolphin, warm)
+]
+print("valid:", not counterexamples)
+"""
+
+# Refused before it runs: os is not on the allowlist.
+REFUSED = """
+import os
+print(os.listdir("."))
+"""
+
+
+def _text(result) -> str:
+    return "\n".join(part.text for part in result.content if hasattr(part, "text"))
+
 
 async def main():
-    """Connect to QWED-MCP server and test all verification tools."""
-    
-    # Connect to the server
     server_params = StdioServerParameters(
         command="python",
-        args=["-m", "qwed_mcp.server"]
+        args=["-m", "qwed_mcp.server"],
+        env={"QWED_MCP_TRUSTED_CODE_EXECUTION": "true"},
     )
-    
+
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
-            # Initialize the session
             await session.initialize()
-            
-            # List available tools
+
             tools = await session.list_tools()
-            print("=" * 60)
-            print("QWED-MCP Available Tools:")
-            print("=" * 60)
-            for tool in tools.tools:
-                print(f"  • {tool.name}: {tool.description[:50]}...")
-            print()
-            
-            # Test 1: Math Verification
-            print("=" * 60)
-            print("Test 1: Math Verification (Derivative)")
-            print("=" * 60)
+            print("Tools:", ", ".join(tool.name for tool in tools.tools))
+
+            print("\n1. Compound interest with exact decimal arithmetic")
             result = await session.call_tool(
-                "verify_math",
-                arguments={
-                    "expression": "x**3",
-                    "claimed_result": "3*x**2",
-                    "operation": "derivative"
-                }
+                "execute_python_code", arguments={"code": COMPOUND_INTEREST}
             )
-            print(f"Expression: x³")
-            print(f"Claimed derivative: 3x²")
-            print(f"Result: {result}")
-            print()
-            
-            # Test 2: Wrong Math (should fail)
-            print("=" * 60)
-            print("Test 2: Math Verification (Wrong Answer)")
-            print("=" * 60)
+            print(_text(result))
+
+            print("\n2. A syllogism checked over every truth assignment")
             result = await session.call_tool(
-                "verify_math",
-                arguments={
-                    "expression": "x**2",
-                    "claimed_result": "3*x",  # Wrong! Should be 2*x
-                    "operation": "derivative"
-                }
+                "execute_python_code", arguments={"code": SYLLOGISM}
             )
-            print(f"Expression: x²")
-            print(f"Claimed derivative: 3x (WRONG)")
-            print(f"Result: {result}")
-            print()
-            
-            # Test 3: Logic Verification
-            print("=" * 60)
-            print("Test 3: Logic Verification (Syllogism)")
-            print("=" * 60)
+            print(_text(result))
+
+            print("\n3. Code outside the allowlist is refused, with the reason")
             result = await session.call_tool(
-                "verify_logic",
-                arguments={
-                    "premises": [
-                        "A implies B",
-                        "A"
-                    ],
-                    "conclusion": "B"
-                }
+                "execute_python_code", arguments={"code": REFUSED}
             )
-            print(f"Premises: A → B, A")
-            print(f"Conclusion: B")
-            print(f"Result: {result}")
-            print()
-            
-            # Test 4: Code Security
-            print("=" * 60)
-            print("Test 4: Code Security Check")
-            print("=" * 60)
+            print(_text(result))
+
+            print("\n4. A background job, read back with verification_status")
             result = await session.call_tool(
-                "verify_code",
-                arguments={
-                    "code": "def run(cmd): os.system(cmd); eval(input())",
-                    "language": "python"
-                }
+                "execute_python_code",
+                arguments={"code": COMPOUND_INTEREST, "background": True},
             )
-            print(f"Code: def run(cmd): os.system(cmd); eval(input())")
-            print(f"Result: {result}")
-            print()
-            
-            # Test 5: SQL Injection
-            print("=" * 60)
-            print("Test 5: SQL Injection Detection")
-            print("=" * 60)
-            result = await session.call_tool(
-                "verify_sql",
-                arguments={
-                    "query": "SELECT * FROM users WHERE id = '1' OR '1'='1'"
-                }
-            )
-            print(f"Query: SELECT * FROM users WHERE id = '1' OR '1'='1'")
-            print(f"Result: {result}")
-            print()
-            
-            # Test 6: Safe SQL
-            print("=" * 60)
-            print("Test 6: Safe Parameterized Query")
-            print("=" * 60)
-            result = await session.call_tool(
-                "verify_sql",
-                arguments={
-                    "query": "SELECT name, email FROM users WHERE id = ?"
-                }
-            )
-            print(f"Query: SELECT name, email FROM users WHERE id = ?")
-            print(f"Result: {result}")
-            print()
-            
-            print("=" * 60)
-            print("All tests completed!")
-            print("=" * 60)
+            message = _text(result)
+            print(message)
+            job_id = message.split("request ", 1)[1].split(".", 1)[0]
+            for _ in range(20):
+                await asyncio.sleep(0.5)
+                status = await session.call_tool(
+                    "verification_status", arguments={"job_id": job_id}
+                )
+                status_text = _text(status)
+                # "Status: queued..." and "Status: running..." are not final.
+                if not status_text.endswith("..."):
+                    break
+            print(status_text)
 
 
 if __name__ == "__main__":
