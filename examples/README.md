@@ -1,102 +1,85 @@
 # QWED-MCP Examples
 
-This folder contains example scripts and sample prompts for using QWED-MCP.
+QWED-MCP registers two tools:
 
-## Sample Prompts for Claude Desktop
+- `execute_python_code` runs Python code after the allowlist admission check (see [What code is admitted](../README.md#what-code-is-admitted));
+- `verification_status` reads the result of a job started with `"background": true`.
 
-Copy and paste these prompts into Claude Desktop to test QWED-MCP:
+Code execution is off by default. The server's environment must set `QWED_MCP_TRUSTED_CODE_EXECUTION=true`, and admitted code then runs with the server's privileges.
 
-### 1. Basic Math Verification
+The `verify_math`, `verify_logic`, `verify_code` and `verify_sql` tools were removed in v0.2.1. If Claude tries to call one, tell it to write and run a script with `execute_python_code` instead.
+
+## Sample prompts for Claude Desktop
+
+### 1. Compound interest
+
 ```
-Verify the derivative of x³ equals 3x² using verify_math
-```
+A bank advertises: "Invest $10,000 at 7.5% annual rate compounded quarterly for 5 years and you'll have $14,356.29".
 
-### 2. Financial Calculation - Compound Interest
-```
-A bank advertises: "Invest $10,000 at 7.5% annual rate compounded quarterly for 5 years and you'll have $14,356.29"
-
-Use verify_math to check if this is correct. 
-Formula: A = P(1 + r/n)^(nt) where P=10000, r=0.075, n=4, t=5
-```
-
-### 3. Loan EMI Calculation
-```
-A car dealer claims: "₹10,00,000 loan at 9% annual interest for 5 years = EMI of ₹20,758"
-
-Verify using verify_math with EMI formula:
-EMI = P × r × (1+r)^n / ((1+r)^n - 1)
-where P=1000000, r=0.09/12, n=60
+Write a Python script that computes this with the decimal module, A = P(1 + r/n)^(nt) with P=10000, r=0.075, n=4, t=5, rounds to cents and compares it with the claim. Run it with execute_python_code.
 ```
 
-### 4. Logic Verification - Syllogism
-```
-Use verify_logic to check this argument:
-Premises:
-1. All mammals are warm-blooded
-2. Dolphins are mammals
+The script prints 14499.48, so the claim is wrong: 14,356.29 is what annual compounding gives.
 
-Conclusion: Dolphins are warm-blooded
-```
+### 2. Loan EMI
 
-### 5. Business Logic Validation
 ```
-Use verify_logic to validate this tax rule:
-Premises:
-1. If income > 1000000 then tax_bracket is 30%
-2. If income <= 1000000 AND income > 500000 then tax_bracket is 20%
-3. My income is 750000
+A car dealer claims: "₹10,00,000 loan at 9% annual interest for 5 years = EMI of ₹20,758".
 
-Conclusion: My tax_bracket is 20%
+Write a Python script with the decimal module for EMI = P × r × (1+r)^n / ((1+r)^n - 1), with P=1000000, r=0.09/12, n=60, and run it with execute_python_code.
 ```
 
-### 6. Code Security - Dangerous Functions
-```
-Use verify_code to check this Python code for security issues:
+The script prints 20758.36, so the claim holds to the rupee.
 
-def run_command(user_input):
-    os.system(user_input)
-    result = eval(get_response())
-    return result
-```
+### 3. A syllogism
 
-### 7. Code Security - Trading Algorithm
 ```
-Use verify_code to check this trading function:
+Premises: all mammals are warm-blooded; dolphins are mammals.
+Conclusion: dolphins are warm-blooded.
 
-def execute_trade(order_data):
-    command = f"python executor.py --order '{order_data}'"
-    os.system(command)
-    return eval(get_response())
+Write a Python script that checks the argument over every true/false assignment with itertools.product, and run it with execute_python_code.
 ```
 
-### 8. SQL Injection Detection
-```
-Use verify_sql to check this query for security issues:
-SELECT * FROM users WHERE id = '1' OR '1'='1'
-```
+### 4. A business rule
 
-### 9. SQL Injection - Payment System
 ```
-A developer wrote this payment query. Use verify_sql to check:
-
-SELECT account_balance, credit_limit 
-FROM customer_accounts 
-WHERE customer_id = '12345' OR '1'='1' 
-AND account_type = 'premium'
+Rules: income above 1,000,000 is taxed at 30%; income above 500,000 and up to 1,000,000 at 20%.
+My income is 750,000. Write a Python script that applies the rules and prints my bracket, and run it with execute_python_code.
 ```
 
-### 10. Safe SQL Validation
+### 5. Code that is refused
+
 ```
-Use verify_sql to check if this parameterized query is safe:
-SELECT name, email FROM users WHERE id = ?
+Run this with execute_python_code:
+
+import os
+print(os.listdir("."))
 ```
 
----
+The server refuses it before it runs and gives the reason: `Module 'os' is not admitted`. Code that imports a module outside the allowlist, calls a refused builtin such as `open`, `eval` or `getattr`, or reads a private attribute is refused the same way.
 
-## Python Client Example
+### 6. A long job in the background
 
-See `python_client.py` for programmatic usage of QWED-MCP.
+```
+Run a script with execute_python_code and "background": true that sums 1/k² for k from 1 to 2,000,000 and compares it with π²/6, then read the result with verification_status.
+```
 
-## Integration Examples
+## Python client
 
-See `langchain_integration.py` for using QWED-MCP with LangChain agents.
+`python_client.py` starts the server over stdio and calls both tools: two admitted scripts, one refused script, and a background job read back with `verification_status`.
+
+```bash
+pip install qwed-mcp
+python examples/python_client.py
+```
+
+## SQL, logic and math checks as a library
+
+The math, logic and SQL engines are not MCP tools. Python code can call them directly, for example:
+
+```python
+from qwed_mcp.engines.sql_engine import verify_sql_query
+
+verify_sql_query("SELECT * FROM users WHERE id = '1' OR '1'='1'")
+# {'verified': False, ...}: the condition does not depend on the row
+```
