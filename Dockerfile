@@ -45,6 +45,7 @@ COPY pyproject.toml .
 COPY uv.lock .
 COPY README.md .
 COPY LICENSE .
+COPY NOTICE .
 
 # Install locked dependencies first (binary only, no third-party build scripts)
 RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev --no-install-project --no-build
