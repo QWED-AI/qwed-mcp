@@ -360,6 +360,8 @@ black src/
 
 Apache 2.0 — See [LICENSE](LICENSE)
 
+Redistributions keep the attribution in [NOTICE](NOTICE), and [TRADEMARKS.md](TRADEMARKS.md) says how the QWED name and logo may be used.
+
 ---
 
 <p align="center">
