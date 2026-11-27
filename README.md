@@ -177,7 +177,7 @@ Read the user terms in the attached document.
 
 ### ✅ QWED-MCP IS:
 - **MCP Server** that adds verification tools to Claude Desktop and VS Code
-- **Deterministic** — uses SymPy (math), Z3 (logic), AST (code) for exact verification
+- **Script-based** — the model checks its answer with a script whose result is computed, not guessed; the script may use only allowlisted standard-library modules ([What code is admitted](#what-code-is-admitted)). A script that uses `random` or `time` can print a different result on each run.
 - **Open source** — works with any MCP-compatible AI assistant
 - **A safety layer** — catches LLM hallucinations in real-time
 
@@ -185,11 +185,11 @@ Read the user terms in the attached document.
 - ~~A replacement for Claude~~ — it enhances Claude with verification tools
 - ~~A chatbot~~ — it's a backend server that Claude calls
 - ~~Internet-connected~~ — all verification happens locally
-- ~~A fine-tuned model~~ — uses symbolic engines, not ML
+- ~~A fine-tuned model~~ — it runs code, not ML
 
-> **Think of QWED-MCP as giving Claude a "calculator" for math and a "theorem prover" for logic.**
+> **Think of QWED-MCP as giving Claude a calculator: Claude writes the check, QWED-MCP admits it by allowlist and runs it with the server's privileges.**
 > 
-> Claude reasons. QWED-MCP verifies.
+> Claude reasons. QWED-MCP runs the check.
 
 ---
 
@@ -198,17 +198,17 @@ Read the user terms in the attached document.
 | Aspect | Other MCP Servers | QWED-MCP |
 |--------|-------------------|----------|
 | **Purpose** | Connect to APIs, databases, files | Verify LLM outputs |
-| **Approach** | Fetch external data | Compute deterministic proofs |
-| **Engines** | API wrappers | SymPy, Z3, AST analyzers |
-| **Accuracy** | Depends on data source | 100% mathematically proven |
-| **Offline** | Often need internet | Fully local, no APIs |
+| **Approach** | Fetch external data | Run a model-written check behind an allowlist |
+| **Engines** | API wrappers | Python's standard library (`math`, `decimal`, `fractions`, …), behind an allowlist |
+| **Accuracy** | Depends on data source | Computed by the script the model writes: a check, not a proof |
+| **Offline** | Often need internet | Fully local; error reports go to Sentry only if you set `SENTRY_DSN` |
 
 ### With Claude Desktop
 ```
 ┌───────────────────┐     ┌───────────────────────┐     ┌───────────────────┐
-│      Claude       │     │       QWED-MCP        │     │  Verified Answer  │
+│      Claude       │     │       QWED-MCP        │     │  Checked Answer   │
 │ "What's d/dx x³?" │ ──► │ execute_python_code() │ ──► │      "3x²" ✓      │
-│ "Write script to  │     │ Runs SymPy natively   │     │ (STDOUT Captured) │
+│ "Write script to  │     │ Runs admitted Python  │     │ (STDOUT Captured) │
 │ check."           │     └───────────────────────┘     └───────────────────┘
 └───────────────────┘
 ```
@@ -217,14 +217,14 @@ Read the user terms in the attached document.
 
 ## 🔒 Security & Privacy
 
-> **All verification happens locally. Nothing is sent to external servers.**
+> **All verification happens locally. Nothing is sent to external servers unless you set `SENTRY_DSN`; then error reports go to Sentry.**
 
 | Concern | QWED-MCP Approach |
 |---------|-------------------|
-| **Data Transmission** | ❌ No external API calls |
-| **Storage** | ❌ Nothing logged or stored |
-| **Dependencies** | ✅ Local engines (SymPy, Z3) |
-| **Code Analysis** | ✅ Your code never leaves your machine |
+| **Data Transmission** | ❌ No external API calls (error reports go to Sentry only if you set `SENTRY_DSN`) |
+| **Storage** | ❌ Nothing kept: each script is written to a temporary file and deleted after its run (a server killed mid-run can leave it behind), and logs go to stderr. With `SENTRY_DSN` set, error reports, which can include stack-frame values, go to Sentry |
+| **Dependencies** | ✅ Scripts use only allowlisted standard-library modules |
+| **Code Analysis** | ✅ Your code never leaves your machine, unless `SENTRY_DSN` is set and an error report carries it in its stack frames |
 
 **Perfect for:**
 - Enterprises with strict security policies
