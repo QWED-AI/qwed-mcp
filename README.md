@@ -177,7 +177,7 @@ Read the user terms in the attached document.
 
 ### ✅ QWED-MCP IS:
 - **MCP Server** that adds verification tools to Claude Desktop and VS Code
-- **Deterministic** — the model checks its answer with a script whose result is computed, not guessed; the script may use only allowlisted standard-library modules ([What code is admitted](#what-code-is-admitted))
+- **Script-based** — the model checks its answer with a script whose result is computed, not guessed; the script may use only allowlisted standard-library modules ([What code is admitted](#what-code-is-admitted)). A script that uses `random` or `time` can print a different result on each run.
 - **Open source** — works with any MCP-compatible AI assistant
 - **A safety layer** — catches LLM hallucinations in real-time
 
@@ -185,11 +185,11 @@ Read the user terms in the attached document.
 - ~~A replacement for Claude~~ — it enhances Claude with verification tools
 - ~~A chatbot~~ — it's a backend server that Claude calls
 - ~~Internet-connected~~ — all verification happens locally
-- ~~A fine-tuned model~~ — uses symbolic engines, not ML
+- ~~A fine-tuned model~~ — it runs code, not ML
 
-> **Think of QWED-MCP as giving Claude a "calculator" for math and a "theorem prover" for logic.**
+> **Think of QWED-MCP as giving Claude a sandboxed calculator: Claude writes the check, QWED-MCP admits it and runs it.**
 > 
-> Claude reasons. QWED-MCP verifies.
+> Claude reasons. QWED-MCP runs the check.
 
 ---
 
@@ -198,7 +198,7 @@ Read the user terms in the attached document.
 | Aspect | Other MCP Servers | QWED-MCP |
 |--------|-------------------|----------|
 | **Purpose** | Connect to APIs, databases, files | Verify LLM outputs |
-| **Approach** | Fetch external data | Compute deterministic proofs |
+| **Approach** | Fetch external data | Run a model-written check behind an allowlist |
 | **Engines** | API wrappers | Python's standard library (`math`, `decimal`, `fractions`, …), behind an allowlist |
 | **Accuracy** | Depends on data source | Computed by the script the model writes: a check, not a proof |
 | **Offline** | Often need internet | Fully local, no APIs |
@@ -206,7 +206,7 @@ Read the user terms in the attached document.
 ### With Claude Desktop
 ```
 ┌───────────────────┐     ┌───────────────────────┐     ┌───────────────────┐
-│      Claude       │     │       QWED-MCP        │     │  Verified Answer  │
+│      Claude       │     │       QWED-MCP        │     │  Checked Answer   │
 │ "What's d/dx x³?" │ ──► │ execute_python_code() │ ──► │      "3x²" ✓      │
 │ "Write script to  │     │ Runs admitted Python  │     │ (STDOUT Captured) │
 │ check."           │     └───────────────────────┘     └───────────────────┘
@@ -217,11 +217,11 @@ Read the user terms in the attached document.
 
 ## 🔒 Security & Privacy
 
-> **All verification happens locally. Nothing is sent to external servers.**
+> **All verification happens locally. Nothing is sent to external servers unless you set `SENTRY_DSN`; then error reports go to Sentry.**
 
 | Concern | QWED-MCP Approach |
 |---------|-------------------|
-| **Data Transmission** | ❌ No external API calls (verification events and their details go to Sentry only if you set `SENTRY_DSN`) |
+| **Data Transmission** | ❌ No external API calls (error reports go to Sentry only if you set `SENTRY_DSN`) |
 | **Storage** | ❌ Nothing logged or stored |
 | **Dependencies** | ✅ Scripts use only allowlisted standard-library modules |
 | **Code Analysis** | ✅ Your code never leaves your machine |
