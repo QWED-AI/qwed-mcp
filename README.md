@@ -187,7 +187,7 @@ Read the user terms in the attached document.
 - ~~Internet-connected~~ — all verification happens locally
 - ~~A fine-tuned model~~ — it runs code, not ML
 
-> **Think of QWED-MCP as giving Claude a sandboxed calculator: Claude writes the check, QWED-MCP admits it and runs it.**
+> **Think of QWED-MCP as giving Claude a calculator: Claude writes the check, QWED-MCP admits it by allowlist and runs it with the server's privileges.**
 > 
 > Claude reasons. QWED-MCP runs the check.
 
@@ -201,7 +201,7 @@ Read the user terms in the attached document.
 | **Approach** | Fetch external data | Run a model-written check behind an allowlist |
 | **Engines** | API wrappers | Python's standard library (`math`, `decimal`, `fractions`, …), behind an allowlist |
 | **Accuracy** | Depends on data source | Computed by the script the model writes: a check, not a proof |
-| **Offline** | Often need internet | Fully local, no APIs |
+| **Offline** | Often need internet | Fully local; error reports go to Sentry only if you set `SENTRY_DSN` |
 
 ### With Claude Desktop
 ```
@@ -222,7 +222,7 @@ Read the user terms in the attached document.
 | Concern | QWED-MCP Approach |
 |---------|-------------------|
 | **Data Transmission** | ❌ No external API calls (error reports go to Sentry only if you set `SENTRY_DSN`) |
-| **Storage** | ❌ Nothing logged or stored |
+| **Storage** | ❌ Nothing kept: each script lives in a temporary file only for its run, and logs go to stderr. With `SENTRY_DSN` set, error reports, which can include stack-frame values, go to Sentry |
 | **Dependencies** | ✅ Scripts use only allowlisted standard-library modules |
 | **Code Analysis** | ✅ Your code never leaves your machine |
 
