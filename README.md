@@ -177,7 +177,7 @@ Read the user terms in the attached document.
 
 ### ✅ QWED-MCP IS:
 - **MCP Server** that adds verification tools to Claude Desktop and VS Code
-- **Deterministic** — uses SymPy (math), Z3 (logic), AST (code) for exact verification
+- **Deterministic** — the model checks its answer with a script whose result is computed, not guessed; the script may use only allowlisted standard-library modules ([What code is admitted](#what-code-is-admitted))
 - **Open source** — works with any MCP-compatible AI assistant
 - **A safety layer** — catches LLM hallucinations in real-time
 
@@ -199,8 +199,8 @@ Read the user terms in the attached document.
 |--------|-------------------|----------|
 | **Purpose** | Connect to APIs, databases, files | Verify LLM outputs |
 | **Approach** | Fetch external data | Compute deterministic proofs |
-| **Engines** | API wrappers | SymPy, Z3, AST analyzers |
-| **Accuracy** | Depends on data source | 100% mathematically proven |
+| **Engines** | API wrappers | Python's standard library (`math`, `decimal`, `fractions`, …), behind an allowlist |
+| **Accuracy** | Depends on data source | Computed by the script the model writes: a check, not a proof |
 | **Offline** | Often need internet | Fully local, no APIs |
 
 ### With Claude Desktop
@@ -208,7 +208,7 @@ Read the user terms in the attached document.
 ┌───────────────────┐     ┌───────────────────────┐     ┌───────────────────┐
 │      Claude       │     │       QWED-MCP        │     │  Verified Answer  │
 │ "What's d/dx x³?" │ ──► │ execute_python_code() │ ──► │      "3x²" ✓      │
-│ "Write script to  │     │ Runs SymPy natively   │     │ (STDOUT Captured) │
+│ "Write script to  │     │ Runs admitted Python  │     │ (STDOUT Captured) │
 │ check."           │     └───────────────────────┘     └───────────────────┘
 └───────────────────┘
 ```
@@ -221,9 +221,9 @@ Read the user terms in the attached document.
 
 | Concern | QWED-MCP Approach |
 |---------|-------------------|
-| **Data Transmission** | ❌ No external API calls |
+| **Data Transmission** | ❌ No external API calls (verification events and their details go to Sentry only if you set `SENTRY_DSN`) |
 | **Storage** | ❌ Nothing logged or stored |
-| **Dependencies** | ✅ Local engines (SymPy, Z3) |
+| **Dependencies** | ✅ Scripts use only allowlisted standard-library modules |
 | **Code Analysis** | ✅ Your code never leaves your machine |
 
 **Perfect for:**
