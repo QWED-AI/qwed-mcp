@@ -222,9 +222,9 @@ Read the user terms in the attached document.
 | Concern | QWED-MCP Approach |
 |---------|-------------------|
 | **Data Transmission** | ❌ No external API calls (error reports go to Sentry only if you set `SENTRY_DSN`) |
-| **Storage** | ❌ Nothing kept: each script lives in a temporary file only for its run, and logs go to stderr. With `SENTRY_DSN` set, error reports, which can include stack-frame values, go to Sentry |
+| **Storage** | ❌ Nothing kept: each script is written to a temporary file and deleted after its run (a server killed mid-run can leave it behind), and logs go to stderr. With `SENTRY_DSN` set, error reports, which can include stack-frame values, go to Sentry |
 | **Dependencies** | ✅ Scripts use only allowlisted standard-library modules |
-| **Code Analysis** | ✅ Your code never leaves your machine |
+| **Code Analysis** | ✅ Your code never leaves your machine, unless `SENTRY_DSN` is set and an error report carries it in its stack frames |
 
 **Perfect for:**
 - Enterprises with strict security policies
